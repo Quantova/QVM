@@ -1,0 +1,9 @@
+[package]
+name = "qtv-vm"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Quantova register virtual machine core with instruction set, deterministic interpreter, gas model, bytecode container, and assembler."
+
+[dependencies]
