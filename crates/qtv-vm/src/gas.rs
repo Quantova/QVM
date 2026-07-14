@@ -1,5 +1,5 @@
 //! Fixed gas schedule. Every implemented instruction has one deterministic cost. The cost of a
-//! cryptographic instruction is provisional until the cryptography benchmarks set it.
+//! cryptographic instruction is scaled from the primitive throughput benchmark in the crypto crate.
 
 use crate::isa::OpCode;
 
@@ -49,13 +49,15 @@ pub fn cost(op: OpCode) -> u64 {
 
         OpCode::Send => 200,
 
-        // Provisional, set from the cryptography benchmarks once the primitive opcodes land.
+        // Fixed costs scaled from the primitive throughput benchmark in the crypto crate,
+        // benches/throughput.rs, whose per operation timings calibrate the gas. The hash based
+        // schemes cost far more than the lattice ones, matching their measured verify times.
         OpCode::Hash => 32,
-        OpCode::VerifyMl => 2000,
-        OpCode::VerifySlh => 8000,
-        OpCode::MerkleVerify => 400,
-        OpCode::VrfVerify => 2500,
-        OpCode::Kem => 1500,
+        OpCode::VerifyMl => 1600,
+        OpCode::VerifySlh => 64000,
+        OpCode::MerkleVerify => 512,
+        OpCode::VrfVerify => 66000,
+        OpCode::Kem => 640,
     }
 }
 
