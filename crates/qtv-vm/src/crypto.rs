@@ -3,6 +3,7 @@
 //! writes a boolean acceptance into a register or bytes into memory. Every primitive is post-quantum
 //! and comes from qtv-crypto. A digest stays raw bytes and is never formatted.
 
+use qtv_crypto::ml_dsa;
 use qtv_crypto::sha3::sha3_256;
 
 use crate::interp::Fault;
@@ -22,6 +23,30 @@ pub(crate) fn hash(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), Fault>
     if !m.mem_write(out, &digest) {
         return Err(Fault::BadMemory);
     }
+    Ok(())
+}
+
+/// ML-DSA verify. Register `a` holds the input pointer, `b` the input length, and `c` the
+/// destination register. The region is the public key, then the signature, then the message. Writes
+/// one when the signature verifies under an empty context and zero otherwise.
+pub(crate) fn verify_ml(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), Fault> {
+    const PK: usize = ml_dsa::PUBLIC_KEY_BYTES;
+    const SIG: usize = ml_dsa::SIGNATURE_BYTES;
+    let ptr = m.reg(a);
+    let len = m.reg(b);
+    let (pk, sig, message) = {
+        let region = m.mem_region(ptr, len).ok_or(Fault::BadMemory)?;
+        if region.len() < PK + SIG {
+            return Err(Fault::BadMemory);
+        }
+        let pk: [u8; PK] = region[..PK].try_into().map_err(|_| Fault::BadMemory)?;
+        let sig: [u8; SIG] = region[PK..PK + SIG]
+            .try_into()
+            .map_err(|_| Fault::BadMemory)?;
+        (pk, sig, region[PK + SIG..].to_vec())
+    };
+    let ok = ml_dsa::verify(&pk, &message, &sig, &[]);
+    m.set_reg(c, u64::from(ok));
     Ok(())
 }
 
@@ -64,5 +89,45 @@ mod tests {
         m.set_reg(1, 8);
         m.set_reg(2, u64::MAX);
         assert_eq!(hash(&mut m, 0, 1, 2), Err(Fault::BadMemory));
+    }
+
+    // Build a public key, signature, message region and load it at offset zero, returning the region
+    // length. Register 0 points at the region and register 1 holds its length.
+    fn load_ml(m: &mut Machine, pk: &[u8], sig: &[u8], msg: &[u8]) -> u64 {
+        let mut region = Vec::new();
+        region.extend_from_slice(pk);
+        region.extend_from_slice(sig);
+        region.extend_from_slice(msg);
+        assert!(m.mem_write(0, &region));
+        m.set_reg(0, 0);
+        m.set_reg(1, region.len() as u64);
+        region.len() as u64
+    }
+
+    #[test]
+    fn verify_ml_accepts_valid_and_rejects_tampered() {
+        let (pk, sk) = ml_dsa::keygen(&[7u8; 32]);
+        let msg = b"quantova ml-dsa verify opcode";
+        let sig = ml_dsa::sign(&sk, msg, &[], &[0u8; 32]).expect("sign");
+
+        let mut m = Machine::new();
+        load_ml(&mut m, &pk, &sig, msg);
+        verify_ml(&mut m, 0, 1, 2).expect("verify");
+        assert_eq!(m.reg(2), 1);
+
+        let mut bad = sig;
+        bad[0] ^= 1;
+        let mut m = Machine::new();
+        load_ml(&mut m, &pk, &bad, msg);
+        verify_ml(&mut m, 0, 1, 2).expect("verify");
+        assert_eq!(m.reg(2), 0);
+    }
+
+    #[test]
+    fn verify_ml_rejects_short_region() {
+        let mut m = Machine::new();
+        m.set_reg(0, 0);
+        m.set_reg(1, 16);
+        assert_eq!(verify_ml(&mut m, 0, 1, 2), Err(Fault::BadMemory));
     }
 }

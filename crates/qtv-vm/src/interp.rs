@@ -255,7 +255,7 @@ impl<'a> Interpreter<'a> {
             // Cryptographic group. Each reads its inputs from a scratch memory region and calls the
             // matching post quantum primitive in the crypto crate.
             Instr::Hash { a, b, c } => crate::crypto::hash(m, a, b, c)?,
-            Instr::VerifyMl { .. } => return Err(Fault::Pending(OpCode::VerifyMl)),
+            Instr::VerifyMl { a, b, c } => crate::crypto::verify_ml(m, a, b, c)?,
             Instr::VerifySlh { .. } => return Err(Fault::Pending(OpCode::VerifySlh)),
             Instr::MerkleVerify { .. } => return Err(Fault::Pending(OpCode::MerkleVerify)),
             Instr::VrfVerify { .. } => return Err(Fault::Pending(OpCode::VrfVerify)),
@@ -549,7 +549,6 @@ mod tests {
     #[test]
     fn crypto_group_is_pending() {
         let cases = [
-            (Instr::VerifyMl { a: 0, b: 0, c: 0 }, OpCode::VerifyMl),
             (Instr::VerifySlh { a: 0, b: 0, c: 0 }, OpCode::VerifySlh),
             (
                 Instr::MerkleVerify { a: 0, b: 0, c: 0 },
