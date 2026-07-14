@@ -61,6 +61,13 @@ impl<'a> Interpreter<'a> {
         self
     }
 
+    /// Seed the initial scratch memory. The bytes are copied into the front of the machine memory so
+    pub fn with_memory(mut self, data: &[u8]) -> Self {
+        let n = data.len().min(self.machine.mem.len());
+        self.machine.mem[..n].copy_from_slice(&data[..n]);
+        self
+    }
+
     pub fn run(mut self) -> Result<Outcome, Fault> {
         loop {
             let pc = self.machine.pc as usize;
@@ -565,6 +572,57 @@ mod tests {
             out.gas_used,
             1 + 1 + 3 + 1 + 1 + crate::gas::cost(OpCode::Hash) + 3
         );
+    }
+
+    #[test]
+    fn hand_assembled_hash_and_verify_runs_metered() {
+        use crate::asm::assemble;
+        use qtv_crypto::ml_dsa;
+
+        // A key, a signature over a message, and the message form the verify region at offset zero.
+        let (pk, sk) = ml_dsa::keygen(&[9u8; 32]);
+        let message = b"quantova hand assembled milestone";
+        let signature = ml_dsa::sign(&sk, message, &[], &[0u8; 32]).expect("sign");
+
+        let mut region = Vec::new();
+        region.extend_from_slice(&pk);
+        region.extend_from_slice(&signature);
+        region.extend_from_slice(message);
+
+        let msg_off = ml_dsa::PUBLIC_KEY_BYTES + ml_dsa::SIGNATURE_BYTES;
+        let msg_len = message.len();
+        let region_len = region.len();
+        let digest_off = 32768;
+
+        // Hash the message region into scratch, read the first digest word back, then verify the
+        // signature over the whole region and halt.
+        let src = format!(
+            "LDI r0, {msg_off}\n\
+             LDI r1, {msg_len}\n\
+             LDI r2, {digest_off}\n\
+             HASH r0, r1, r2\n\
+             MLOAD r6, r2\n\
+             LDI r3, 0\n\
+             LDI r4, {region_len}\n\
+             VERIFYML r3, r4, r5\n\
+             HALT"
+        );
+        let code = assemble(&src).expect("assemble");
+        let out = Interpreter::new(&code, &[], 100_000)
+            .with_memory(&region)
+            .run()
+            .expect("halt");
+
+        assert_eq!(out.regs[5], 1, "signature must verify");
+        let digest = qtv_crypto::sha3::sha3_256(message);
+        let first = u64::from_be_bytes(digest[..8].try_into().unwrap());
+        assert_eq!(out.regs[6], first, "hash must match the crypto crate");
+        let expected = 5 * crate::gas::cost(OpCode::Ldi)
+            + crate::gas::cost(OpCode::Hash)
+            + crate::gas::cost(OpCode::MLoad)
+            + crate::gas::cost(OpCode::VerifyMl)
+            + crate::gas::cost(OpCode::Halt);
+        assert_eq!(out.gas_used, expected);
     }
 
     #[test]
