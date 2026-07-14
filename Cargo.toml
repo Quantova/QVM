@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/qtv-vm"]
+members = ["crates/qtv-vm", "fuzz"]
 
 [workspace.package]
 edition = "2021"
