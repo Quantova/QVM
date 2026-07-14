@@ -625,6 +625,110 @@ mod tests {
         assert_eq!(out.gas_used, expected);
     }
 
+    // Run a one instruction verify over a seeded region and return the boolean result and gas used.
+    fn run_verify(mnemonic: &str, region: &[u8]) -> (u64, u64) {
+        use crate::asm::assemble;
+        let src = format!(
+            "LDI r0, 0\nLDI r1, {}\n{} r0, r1, r2\nHALT",
+            region.len(),
+            mnemonic
+        );
+        let code = assemble(&src).expect("assemble");
+        let out = Interpreter::new(&code, &[], 200_000)
+            .with_memory(region)
+            .run()
+            .expect("halt");
+        (out.regs[2], out.gas_used)
+    }
+
+    fn verify_gas(op: OpCode) -> u64 {
+        2 * crate::gas::cost(OpCode::Ldi) + crate::gas::cost(op) + crate::gas::cost(OpCode::Halt)
+    }
+
+    #[test]
+    fn slh_verify_opcode_runs_metered() {
+        use qtv_crypto::slh_dsa;
+        let (sk, pk) = slh_dsa::keygen(&[1u8; 24], &[2u8; 24], &[3u8; 24]);
+        let message = b"quantova slh metered";
+        let sig = slh_dsa::sign(&sk, message, &[], &[4u8; 24]).expect("sign");
+        let mut region = Vec::new();
+        region.extend_from_slice(&pk);
+        region.extend_from_slice(&sig);
+        region.extend_from_slice(message);
+        let (result, gas) = run_verify("VERIFYSLH", &region);
+        assert_eq!(result, 1);
+        assert_eq!(gas, verify_gas(OpCode::VerifySlh));
+    }
+
+    #[test]
+    fn vrf_verify_opcode_runs_metered() {
+        use qtv_crypto::vrf;
+        let (sk, pk) = vrf::keygen(b"quantova vrf metered seed");
+        let input = b"metered input";
+        let (output, proof) = vrf::prove(&sk, input);
+        let mut region = Vec::new();
+        region.extend_from_slice(&pk);
+        region.extend_from_slice(&output);
+        region.extend_from_slice(&proof);
+        region.extend_from_slice(input);
+        let (result, gas) = run_verify("VRFVERIFY", &region);
+        assert_eq!(result, 1);
+        assert_eq!(gas, verify_gas(OpCode::VrfVerify));
+    }
+
+    #[test]
+    fn merkle_verify_opcode_runs_metered() {
+        use qtv_crypto::sha3::sha3_256;
+        fn node(left: &[u8], right: &[u8]) -> [u8; 32] {
+            let mut pair = [0u8; 64];
+            pair[..32].copy_from_slice(left);
+            pair[32..].copy_from_slice(right);
+            sha3_256(&pair)
+        }
+        let leaves: Vec<[u8; 32]> = (0..4u8).map(|i| sha3_256(&[i])).collect();
+        let p01 = node(&leaves[0], &leaves[1]);
+        let p23 = node(&leaves[2], &leaves[3]);
+        let root = node(&p01, &p23);
+        let index: u64 = 2;
+        let mut region = Vec::new();
+        region.extend_from_slice(&root);
+        region.extend_from_slice(&index.to_be_bytes());
+        region.extend_from_slice(&leaves[2]);
+        region.extend_from_slice(&leaves[3]);
+        region.extend_from_slice(&p01);
+        let (result, gas) = run_verify("MERKLEVERIFY", &region);
+        assert_eq!(result, 1);
+        assert_eq!(gas, verify_gas(OpCode::MerkleVerify));
+    }
+
+    #[test]
+    fn kem_opcode_runs_metered() {
+        use crate::asm::assemble;
+        use qtv_crypto::ml_kem;
+        let (ek, _dk) = ml_kem::keygen(&[4u8; 32], &[5u8; 32]);
+        let msg = [6u8; 32];
+        let mut region = Vec::new();
+        region.extend_from_slice(&ek);
+        region.extend_from_slice(&msg);
+        let src = format!(
+            "LDI r0, 0\nLDI r1, {}\nLDI r2, 8192\nKEM r0, r1, r2\nMLOAD r3, r2\nHALT",
+            region.len()
+        );
+        let code = assemble(&src).expect("assemble");
+        let out = Interpreter::new(&code, &[], 100_000)
+            .with_memory(&region)
+            .run()
+            .expect("halt");
+        let (want_ss, _ct) = ml_kem::encaps(&ek, &msg);
+        let first = u64::from_be_bytes(want_ss[..8].try_into().unwrap());
+        assert_eq!(out.regs[3], first);
+        let expected = 3 * crate::gas::cost(OpCode::Ldi)
+            + crate::gas::cost(OpCode::Kem)
+            + crate::gas::cost(OpCode::MLoad)
+            + crate::gas::cost(OpCode::Halt);
+        assert_eq!(out.gas_used, expected);
+    }
+
     #[test]
     fn out_of_gas_rolls_back_storage() {
         // The self loop at offset 23 burns gas after the write, so the fault discards the write.
