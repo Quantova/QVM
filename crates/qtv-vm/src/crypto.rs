@@ -4,7 +4,7 @@
 //! and comes from qtv-crypto. A digest stays raw bytes and is never formatted.
 
 use qtv_crypto::sha3::sha3_256;
-use qtv_crypto::{ml_dsa, slh_dsa};
+use qtv_crypto::{ml_dsa, slh_dsa, vrf};
 
 use crate::interp::Fault;
 use crate::isa::Reg;
@@ -117,6 +117,34 @@ pub(crate) fn merkle_verify(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(
         node = sha3_256(&pair);
     }
     m.set_reg(c, u64::from(node == root));
+    Ok(())
+}
+
+/// Random function verify. Register `a` holds the input pointer, `b` the input length, and `c` the
+/// destination register. The region is the public key, the output, the proof, then the input. Writes
+/// one when the output and proof verify for the input under the public key and zero otherwise.
+pub(crate) fn verify_vrf(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), Fault> {
+    const PK: usize = vrf::PUBLIC_KEY_BYTES;
+    const OUT: usize = vrf::OUTPUT_BYTES;
+    const PROOF: usize = vrf::PROOF_BYTES;
+    let ptr = m.reg(a);
+    let len = m.reg(b);
+    let (pk, output, proof, input) = {
+        let region = m.mem_region(ptr, len).ok_or(Fault::BadMemory)?;
+        if region.len() < PK + OUT + PROOF {
+            return Err(Fault::BadMemory);
+        }
+        let pk: [u8; PK] = region[..PK].try_into().map_err(|_| Fault::BadMemory)?;
+        let output: [u8; OUT] = region[PK..PK + OUT]
+            .try_into()
+            .map_err(|_| Fault::BadMemory)?;
+        let proof: [u8; PROOF] = region[PK + OUT..PK + OUT + PROOF]
+            .try_into()
+            .map_err(|_| Fault::BadMemory)?;
+        (pk, output, proof, region[PK + OUT + PROOF..].to_vec())
+    };
+    let ok = vrf::verify(&pk, &input, &output, &proof);
+    m.set_reg(c, u64::from(ok));
     Ok(())
 }
 
@@ -294,5 +322,32 @@ mod tests {
         assert_eq!(merkle_verify(&mut m, 0, 1, 2), Err(Fault::BadMemory));
         m.set_reg(1, 8);
         assert_eq!(merkle_verify(&mut m, 0, 1, 2), Err(Fault::BadMemory));
+    }
+
+    #[test]
+    fn verify_vrf_accepts_valid_and_rejects_wrong() {
+        let (sk, pk) = vrf::keygen(b"quantova vrf verify opcode seed");
+        let input = b"committee sampling input";
+        let (output, proof) = vrf::prove(&sk, input);
+
+        let mut m = Machine::new();
+        load_region(&mut m, &[&pk, &output, &proof, input]);
+        verify_vrf(&mut m, 0, 1, 2).expect("vrf");
+        assert_eq!(m.reg(2), 1);
+
+        let mut bad = output;
+        bad[0] ^= 1;
+        let mut m = Machine::new();
+        load_region(&mut m, &[&pk, &bad, &proof, input]);
+        verify_vrf(&mut m, 0, 1, 2).expect("vrf");
+        assert_eq!(m.reg(2), 0);
+    }
+
+    #[test]
+    fn verify_vrf_rejects_short_region() {
+        let mut m = Machine::new();
+        m.set_reg(0, 0);
+        m.set_reg(1, 80);
+        assert_eq!(verify_vrf(&mut m, 0, 1, 2), Err(Fault::BadMemory));
     }
 }

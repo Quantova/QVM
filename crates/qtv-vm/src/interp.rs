@@ -258,7 +258,7 @@ impl<'a> Interpreter<'a> {
             Instr::VerifyMl { a, b, c } => crate::crypto::verify_ml(m, a, b, c)?,
             Instr::VerifySlh { a, b, c } => crate::crypto::verify_slh(m, a, b, c)?,
             Instr::MerkleVerify { a, b, c } => crate::crypto::merkle_verify(m, a, b, c)?,
-            Instr::VrfVerify { .. } => return Err(Fault::Pending(OpCode::VrfVerify)),
+            Instr::VrfVerify { a, b, c } => crate::crypto::verify_vrf(m, a, b, c)?,
             Instr::Kem { .. } => return Err(Fault::Pending(OpCode::Kem)),
         }
         Ok(Step::Next)
@@ -548,10 +548,7 @@ mod tests {
 
     #[test]
     fn crypto_group_is_pending() {
-        let cases = [
-            (Instr::VrfVerify { a: 0, b: 0, c: 0 }, OpCode::VrfVerify),
-            (Instr::Kem { a: 0, b: 0, c: 0 }, OpCode::Kem),
-        ];
+        let cases = [(Instr::Kem { a: 0, b: 0, c: 0 }, OpCode::Kem)];
         for (instr, op) in cases {
             let code = program(&[instr, Instr::Halt]);
             assert_eq!(
