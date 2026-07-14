@@ -252,8 +252,9 @@ impl<'a> Interpreter<'a> {
             // Message group. Enqueuing an asynchronous message to another contract is pending.
             Instr::Send { .. } => return Err(Fault::Pending(OpCode::Send)),
 
-            // Cryptographic group. These call the post quantum crypto crate once wired. Pending.
-            Instr::Hash { .. } => return Err(Fault::Pending(OpCode::Hash)),
+            // Cryptographic group. Each reads its inputs from a scratch memory region and calls the
+            // matching post quantum primitive in the crypto crate.
+            Instr::Hash { a, b, c } => crate::crypto::hash(m, a, b, c)?,
             Instr::VerifyMl { .. } => return Err(Fault::Pending(OpCode::VerifyMl)),
             Instr::VerifySlh { .. } => return Err(Fault::Pending(OpCode::VerifySlh)),
             Instr::MerkleVerify { .. } => return Err(Fault::Pending(OpCode::MerkleVerify)),
@@ -548,7 +549,6 @@ mod tests {
     #[test]
     fn crypto_group_is_pending() {
         let cases = [
-            (Instr::Hash { a: 0, b: 0, c: 0 }, OpCode::Hash),
             (Instr::VerifyMl { a: 0, b: 0, c: 0 }, OpCode::VerifyMl),
             (Instr::VerifySlh { a: 0, b: 0, c: 0 }, OpCode::VerifySlh),
             (
@@ -565,6 +565,29 @@ mod tests {
                 Err(Fault::Pending(op))
             );
         }
+    }
+
+    #[test]
+    fn hash_opcode_runs_metered() {
+        let word: u64 = 0x0102_0304_0506_0708;
+        let code = program(&[
+            Instr::Ldi { d: 0, imm: 0 },
+            Instr::Ldi { d: 1, imm: word },
+            Instr::MStore { a: 0, b: 1 },
+            Instr::Ldi { d: 3, imm: 8 },
+            Instr::Ldi { d: 4, imm: 64 },
+            Instr::Hash { a: 0, b: 3, c: 4 },
+            Instr::MLoad { d: 5, a: 4 },
+            Instr::Halt,
+        ]);
+        let out = Interpreter::new(&code, &[], 1000).run().expect("halt");
+        let digest = qtv_crypto::sha3::sha3_256(&word.to_be_bytes());
+        let first = u64::from_be_bytes(digest[..8].try_into().unwrap());
+        assert_eq!(out.regs[5], first);
+        assert_eq!(
+            out.gas_used,
+            1 + 1 + 3 + 1 + 1 + crate::gas::cost(OpCode::Hash) + 3
+        );
     }
 
     #[test]
