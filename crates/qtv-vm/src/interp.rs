@@ -62,19 +62,12 @@ impl<'a> Interpreter<'a> {
         self
     }
 
-    fn cost(&self, op: OpCode) -> u64 {
-        match op {
-            OpCode::Halt => 0,
-            _ => 1,
-        }
-    }
-
     pub fn run(mut self) -> Result<Outcome, Fault> {
         loop {
             let pc = self.machine.pc as usize;
             let (instr, len) = decode(self.code, pc).map_err(Fault::Decode)?;
 
-            let cost = self.cost(instr.opcode());
+            let cost = crate::gas::cost(instr.opcode());
             let spent = self.gas_used.checked_add(cost).ok_or(Fault::OutOfGas)?;
             if spent > self.gas_limit {
                 return Err(Fault::OutOfGas);
