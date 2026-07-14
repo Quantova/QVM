@@ -32,6 +32,7 @@ pub struct Outcome {
 enum Step {
     Next,
     Halt,
+    JumpTo(u32),
 }
 
 pub struct Interpreter<'a> {
@@ -86,11 +87,21 @@ impl<'a> Interpreter<'a> {
                         storage: self.storage,
                     })
                 }
+                Step::JumpTo(target) => self.machine.pc = target,
             }
         }
     }
 
     fn step(&mut self, instr: Instr) -> Result<Step, Fault> {
+        let code_len = self.code.len();
+        let consts = self.consts;
+        let check = |target: u32| -> Result<(), Fault> {
+            if target as usize >= code_len {
+                Err(Fault::BadJump)
+            } else {
+                Ok(())
+            }
+        };
         let m = &mut self.machine;
         match instr {
             Instr::Halt => return Ok(Step::Halt),
@@ -102,7 +113,7 @@ impl<'a> Interpreter<'a> {
             }
             Instr::Ldi { d, imm } => m.set_reg(d, imm),
             Instr::Ldc { d, idx } => {
-                let v = *self.consts.get(idx as usize).ok_or(Fault::BadConst)?;
+                let v = *consts.get(idx as usize).ok_or(Fault::BadConst)?;
                 m.set_reg(d, v);
             }
 
@@ -194,6 +205,37 @@ impl<'a> Interpreter<'a> {
                 if !m.mem_store(m.reg(a), m.reg(b)) {
                     return Err(Fault::BadMemory);
                 }
+            }
+
+            Instr::Jmp { target } => {
+                check(target)?;
+                return Ok(Step::JumpTo(target));
+            }
+            Instr::Jz { a, target } => {
+                if m.reg(a) == 0 {
+                    check(target)?;
+                    return Ok(Step::JumpTo(target));
+                }
+            }
+            Instr::Jnz { a, target } => {
+                if m.reg(a) != 0 {
+                    check(target)?;
+                    return Ok(Step::JumpTo(target));
+                }
+            }
+            Instr::Call { target } => {
+                check(target)?;
+                let ret = u64::from(m.pc);
+                if !m.push(ret) {
+                    return Err(Fault::StackOverflow);
+                }
+                return Ok(Step::JumpTo(target));
+            }
+            Instr::Ret => {
+                let ret = m.pop().ok_or(Fault::StackUnderflow)?;
+                let target = u32::try_from(ret).map_err(|_| Fault::BadJump)?;
+                check(target)?;
+                return Ok(Step::JumpTo(target));
             }
 
             other => return Err(Fault::Pending(other.opcode())),
@@ -392,5 +434,47 @@ mod tests {
             Interpreter::new(&code, &[], 100).run(),
             Err(Fault::BadMemory)
         );
+    }
+
+    #[test]
+    fn backward_branch_loop() {
+        // Ldi is ten bytes, SubW and AddW are four, Jnz is six. The loop head is at offset 30.
+        let code = program(&[
+            Instr::Ldi { d: 0, imm: 3 },
+            Instr::Ldi { d: 1, imm: 0 },
+            Instr::Ldi { d: 2, imm: 1 },
+            Instr::SubW { d: 0, a: 0, b: 2 },
+            Instr::AddW { d: 1, a: 1, b: 2 },
+            Instr::Jnz { a: 0, target: 30 },
+            Instr::Halt,
+        ]);
+        let out = Interpreter::new(&code, &[], 1000).run().expect("halt");
+        assert_eq!(out.regs[0], 0);
+        assert_eq!(out.regs[1], 3);
+    }
+
+    #[test]
+    fn call_and_return() {
+        // Call is five bytes and Halt is one, so the subroutine begins at offset 6.
+        let code = program(&[
+            Instr::Call { target: 6 },
+            Instr::Halt,
+            Instr::Ldi { d: 0, imm: 42 },
+            Instr::Ret,
+        ]);
+        let out = Interpreter::new(&code, &[], 1000).run().expect("halt");
+        assert_eq!(out.regs[0], 42);
+    }
+
+    #[test]
+    fn out_of_gas_faults() {
+        let code = program(&[Instr::Jmp { target: 0 }]);
+        assert_eq!(Interpreter::new(&code, &[], 10).run(), Err(Fault::OutOfGas));
+    }
+
+    #[test]
+    fn jump_out_of_range_faults() {
+        let code = program(&[Instr::Jmp { target: 9999 }]);
+        assert_eq!(Interpreter::new(&code, &[], 100).run(), Err(Fault::BadJump));
     }
 }
