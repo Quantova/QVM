@@ -137,6 +137,43 @@ impl<'a> Interpreter<'a> {
                 m.set_reg(d, v);
             }
 
+            Instr::And { d, a, b } => {
+                let v = m.reg(a) & m.reg(b);
+                m.set_reg(d, v);
+            }
+            Instr::Or { d, a, b } => {
+                let v = m.reg(a) | m.reg(b);
+                m.set_reg(d, v);
+            }
+            Instr::Xor { d, a, b } => {
+                let v = m.reg(a) ^ m.reg(b);
+                m.set_reg(d, v);
+            }
+            Instr::Not { d, a } => {
+                let v = !m.reg(a);
+                m.set_reg(d, v);
+            }
+            Instr::Shl { d, a, b } => {
+                let v = m.reg(a) << (m.reg(b) & 63);
+                m.set_reg(d, v);
+            }
+            Instr::Shr { d, a, b } => {
+                let v = m.reg(a) >> (m.reg(b) & 63);
+                m.set_reg(d, v);
+            }
+            Instr::Eq { d, a, b } => {
+                let v = u64::from(m.reg(a) == m.reg(b));
+                m.set_reg(d, v);
+            }
+            Instr::LtU { d, a, b } => {
+                let v = u64::from(m.reg(a) < m.reg(b));
+                m.set_reg(d, v);
+            }
+            Instr::GtU { d, a, b } => {
+                let v = u64::from(m.reg(a) > m.reg(b));
+                m.set_reg(d, v);
+            }
+
             other => return Err(Fault::Pending(other.opcode())),
         }
         Ok(Step::Next)
@@ -233,5 +270,54 @@ mod tests {
         ]);
         let out = Interpreter::new(&code, &[], 100).run().expect("halt");
         assert_eq!(out.regs[2], 0);
+    }
+
+    #[test]
+    fn logic_and_shift() {
+        let code = program(&[
+            Instr::Ldi { d: 0, imm: 0b1100 },
+            Instr::Ldi { d: 1, imm: 0b1010 },
+            Instr::And { d: 2, a: 0, b: 1 },
+            Instr::Or { d: 3, a: 0, b: 1 },
+            Instr::Xor { d: 4, a: 0, b: 1 },
+            Instr::Ldi { d: 5, imm: 2 },
+            Instr::Shl { d: 6, a: 0, b: 5 },
+            Instr::Shr { d: 7, a: 0, b: 5 },
+            Instr::Halt,
+        ]);
+        let out = Interpreter::new(&code, &[], 100).run().expect("halt");
+        assert_eq!(out.regs[2], 0b1000);
+        assert_eq!(out.regs[3], 0b1110);
+        assert_eq!(out.regs[4], 0b0110);
+        assert_eq!(out.regs[6], 0b110000);
+        assert_eq!(out.regs[7], 0b11);
+    }
+
+    #[test]
+    fn shift_amount_is_masked() {
+        let code = program(&[
+            Instr::Ldi { d: 0, imm: 1 },
+            Instr::Ldi { d: 1, imm: 64 },
+            Instr::Shl { d: 2, a: 0, b: 1 },
+            Instr::Halt,
+        ]);
+        let out = Interpreter::new(&code, &[], 100).run().expect("halt");
+        assert_eq!(out.regs[2], 1);
+    }
+
+    #[test]
+    fn compare_produces_flags() {
+        let code = program(&[
+            Instr::Ldi { d: 0, imm: 3 },
+            Instr::Ldi { d: 1, imm: 9 },
+            Instr::Eq { d: 2, a: 0, b: 1 },
+            Instr::LtU { d: 3, a: 0, b: 1 },
+            Instr::GtU { d: 4, a: 0, b: 1 },
+            Instr::Halt,
+        ]);
+        let out = Interpreter::new(&code, &[], 100).run().expect("halt");
+        assert_eq!(out.regs[2], 0);
+        assert_eq!(out.regs[3], 1);
+        assert_eq!(out.regs[4], 0);
     }
 }
