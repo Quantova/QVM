@@ -247,6 +247,9 @@ impl<'a> Interpreter<'a> {
                 self.storage.insert(key, val);
             }
 
+            // Message group. Enqueuing an asynchronous message to another contract is pending.
+            Instr::Send { .. } => return Err(Fault::Pending(OpCode::Send)),
+
             other => return Err(Fault::Pending(other.opcode())),
         }
         Ok(Step::Next)
@@ -523,6 +526,15 @@ mod tests {
             .run();
         assert_eq!(res, Err(Fault::Overflow));
         assert_eq!(persistent.get(&5), Some(&1));
+    }
+
+    #[test]
+    fn message_group_is_pending() {
+        let code = program(&[Instr::Send { a: 0, b: 0, c: 0 }, Instr::Halt]);
+        assert_eq!(
+            Interpreter::new(&code, &[], 1000).run(),
+            Err(Fault::Pending(OpCode::Send))
+        );
     }
 
     #[test]
