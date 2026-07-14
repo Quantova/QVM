@@ -5,8 +5,9 @@ use crate::isa::{Reg, NUM_REGS};
 /// Maximum depth of the operand and call stack.
 pub const STACK_LIMIT: usize = 1024;
 
-/// Size of the linear scratch memory in bytes.
-pub const MEM_BYTES: usize = 4096;
+/// Size of the linear scratch memory in bytes. It is sized to hold a post-quantum key, signature,
+/// or proof in full, since the cryptographic opcodes read those artifacts from a single region.
+pub const MEM_BYTES: usize = 65536;
 
 /// Width of a machine word in bytes.
 pub const WORD_BYTES: usize = 8;
