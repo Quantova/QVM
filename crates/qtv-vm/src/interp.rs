@@ -256,7 +256,7 @@ impl<'a> Interpreter<'a> {
             // matching post quantum primitive in the crypto crate.
             Instr::Hash { a, b, c } => crate::crypto::hash(m, a, b, c)?,
             Instr::VerifyMl { a, b, c } => crate::crypto::verify_ml(m, a, b, c)?,
-            Instr::VerifySlh { .. } => return Err(Fault::Pending(OpCode::VerifySlh)),
+            Instr::VerifySlh { a, b, c } => crate::crypto::verify_slh(m, a, b, c)?,
             Instr::MerkleVerify { .. } => return Err(Fault::Pending(OpCode::MerkleVerify)),
             Instr::VrfVerify { .. } => return Err(Fault::Pending(OpCode::VrfVerify)),
             Instr::Kem { .. } => return Err(Fault::Pending(OpCode::Kem)),
@@ -549,7 +549,6 @@ mod tests {
     #[test]
     fn crypto_group_is_pending() {
         let cases = [
-            (Instr::VerifySlh { a: 0, b: 0, c: 0 }, OpCode::VerifySlh),
             (
                 Instr::MerkleVerify { a: 0, b: 0, c: 0 },
                 OpCode::MerkleVerify,

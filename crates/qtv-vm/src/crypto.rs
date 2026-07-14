@@ -3,8 +3,8 @@
 //! writes a boolean acceptance into a register or bytes into memory. Every primitive is post-quantum
 //! and comes from qtv-crypto. A digest stays raw bytes and is never formatted.
 
-use qtv_crypto::ml_dsa;
 use qtv_crypto::sha3::sha3_256;
+use qtv_crypto::{ml_dsa, slh_dsa};
 
 use crate::interp::Fault;
 use crate::isa::Reg;
@@ -46,6 +46,31 @@ pub(crate) fn verify_ml(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), F
         (pk, sig, region[PK + SIG..].to_vec())
     };
     let ok = ml_dsa::verify(&pk, &message, &sig, &[]);
+    m.set_reg(c, u64::from(ok));
+    Ok(())
+}
+
+/// SLH-DSA verify. Register `a` holds the input pointer, `b` the input length, and `c` the
+/// destination register. The region is the public key, then the signature, then the message. Writes
+/// one when the hash based signature verifies under an empty context and zero otherwise.
+pub(crate) fn verify_slh(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), Fault> {
+    const PK: usize = slh_dsa::PUBLIC_KEY_BYTES;
+    const SIG: usize = slh_dsa::SIGNATURE_BYTES;
+    let ptr = m.reg(a);
+    let len = m.reg(b);
+    let (pk, sig, message) = {
+        let region = m.mem_region(ptr, len).ok_or(Fault::BadMemory)?;
+        if region.len() < PK + SIG {
+            return Err(Fault::BadMemory);
+        }
+        let pk: [u8; PK] = region[..PK].try_into().map_err(|_| Fault::BadMemory)?;
+        (
+            pk,
+            region[PK..PK + SIG].to_vec(),
+            region[PK + SIG..].to_vec(),
+        )
+    };
+    let ok = slh_dsa::verify(&pk, &message, &sig, &[]);
     m.set_reg(c, u64::from(ok));
     Ok(())
 }
@@ -129,5 +154,43 @@ mod tests {
         m.set_reg(0, 0);
         m.set_reg(1, 16);
         assert_eq!(verify_ml(&mut m, 0, 1, 2), Err(Fault::BadMemory));
+    }
+
+    // Load a public key, signature, message region at offset zero for a verify opcode.
+    fn load_region(m: &mut Machine, parts: &[&[u8]]) {
+        let mut region = Vec::new();
+        for part in parts {
+            region.extend_from_slice(part);
+        }
+        assert!(m.mem_write(0, &region));
+        m.set_reg(0, 0);
+        m.set_reg(1, region.len() as u64);
+    }
+
+    #[test]
+    fn verify_slh_accepts_valid_and_rejects_tampered() {
+        let (sk, pk) = slh_dsa::keygen(&[1u8; 24], &[2u8; 24], &[3u8; 24]);
+        let msg = b"quantova slh-dsa verify opcode";
+        let sig = slh_dsa::sign(&sk, msg, &[], &[4u8; 24]).expect("sign");
+
+        let mut m = Machine::new();
+        load_region(&mut m, &[&pk, &sig, msg]);
+        verify_slh(&mut m, 0, 1, 2).expect("verify");
+        assert_eq!(m.reg(2), 1);
+
+        let mut bad = sig;
+        bad[0] ^= 1;
+        let mut m = Machine::new();
+        load_region(&mut m, &[&pk, &bad, msg]);
+        verify_slh(&mut m, 0, 1, 2).expect("verify");
+        assert_eq!(m.reg(2), 0);
+    }
+
+    #[test]
+    fn verify_slh_rejects_short_region() {
+        let mut m = Machine::new();
+        m.set_reg(0, 0);
+        m.set_reg(1, 64);
+        assert_eq!(verify_slh(&mut m, 0, 1, 2), Err(Fault::BadMemory));
     }
 }
