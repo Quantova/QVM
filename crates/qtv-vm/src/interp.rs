@@ -236,6 +236,17 @@ impl<'a> Interpreter<'a> {
                 return Ok(Step::JumpTo(target));
             }
 
+            Instr::SLoad { d, a } => {
+                let key = m.reg(a);
+                let v = self.storage.get(&key).copied().unwrap_or(0);
+                m.set_reg(d, v);
+            }
+            Instr::SStore { a, b } => {
+                let key = m.reg(a);
+                let val = m.reg(b);
+                self.storage.insert(key, val);
+            }
+
             other => return Err(Fault::Pending(other.opcode())),
         }
         Ok(Step::Next)
@@ -245,6 +256,7 @@ impl<'a> Interpreter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     fn program(instrs: &[Instr]) -> Vec<u8> {
         let mut code = Vec::new();
@@ -474,5 +486,60 @@ mod tests {
     fn jump_out_of_range_faults() {
         let code = program(&[Instr::Jmp { target: 9999 }]);
         assert_eq!(Interpreter::new(&code, &[], 100).run(), Err(Fault::BadJump));
+    }
+
+    #[test]
+    fn storage_store_then_load() {
+        let code = program(&[
+            Instr::Ldi { d: 0, imm: 7 },
+            Instr::Ldi { d: 1, imm: 99 },
+            Instr::SStore { a: 0, b: 1 },
+            Instr::SLoad { d: 2, a: 0 },
+            Instr::Halt,
+        ]);
+        let out = Interpreter::new(&code, &[], 2000).run().expect("halt");
+        assert_eq!(out.regs[2], 99);
+        assert_eq!(out.storage.get(&7), Some(&99));
+    }
+
+    #[test]
+    fn fault_rolls_back_storage() {
+        let mut persistent = BTreeMap::new();
+        persistent.insert(5, 1);
+        let code = program(&[
+            Instr::Ldi { d: 0, imm: 5 },
+            Instr::Ldi { d: 1, imm: 123 },
+            Instr::SStore { a: 0, b: 1 },
+            Instr::Ldi {
+                d: 2,
+                imm: u64::MAX,
+            },
+            Instr::Ldi { d: 3, imm: 1 },
+            Instr::Add { d: 4, a: 2, b: 3 },
+            Instr::Halt,
+        ]);
+        let res = Interpreter::new(&code, &[], 2000)
+            .with_storage(persistent.clone())
+            .run();
+        assert_eq!(res, Err(Fault::Overflow));
+        assert_eq!(persistent.get(&5), Some(&1));
+    }
+
+    #[test]
+    fn out_of_gas_rolls_back_storage() {
+        // The self loop at offset 23 burns gas after the write, so the fault discards the write.
+        let mut persistent = BTreeMap::new();
+        persistent.insert(5, 1);
+        let code = program(&[
+            Instr::Ldi { d: 0, imm: 5 },
+            Instr::Ldi { d: 1, imm: 123 },
+            Instr::SStore { a: 0, b: 1 },
+            Instr::Jmp { target: 23 },
+        ]);
+        let res = Interpreter::new(&code, &[], 520)
+            .with_storage(persistent.clone())
+            .run();
+        assert_eq!(res, Err(Fault::OutOfGas));
+        assert_eq!(persistent.get(&5), Some(&1));
     }
 }
