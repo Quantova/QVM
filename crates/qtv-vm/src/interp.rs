@@ -252,7 +252,13 @@ impl<'a> Interpreter<'a> {
             // Message group. Enqueuing an asynchronous message to another contract is pending.
             Instr::Send { .. } => return Err(Fault::Pending(OpCode::Send)),
 
-            other => return Err(Fault::Pending(other.opcode())),
+            // Cryptographic group. These call the post quantum crypto crate once wired. Pending.
+            Instr::Hash { .. } => return Err(Fault::Pending(OpCode::Hash)),
+            Instr::VerifyMl { .. } => return Err(Fault::Pending(OpCode::VerifyMl)),
+            Instr::VerifySlh { .. } => return Err(Fault::Pending(OpCode::VerifySlh)),
+            Instr::MerkleVerify { .. } => return Err(Fault::Pending(OpCode::MerkleVerify)),
+            Instr::VrfVerify { .. } => return Err(Fault::Pending(OpCode::VrfVerify)),
+            Instr::Kem { .. } => return Err(Fault::Pending(OpCode::Kem)),
         }
         Ok(Step::Next)
     }
@@ -537,6 +543,28 @@ mod tests {
             Interpreter::new(&code, &[], 1000).run(),
             Err(Fault::Pending(OpCode::Send))
         );
+    }
+
+    #[test]
+    fn crypto_group_is_pending() {
+        let cases = [
+            (Instr::Hash { a: 0, b: 0, c: 0 }, OpCode::Hash),
+            (Instr::VerifyMl { a: 0, b: 0, c: 0 }, OpCode::VerifyMl),
+            (Instr::VerifySlh { a: 0, b: 0, c: 0 }, OpCode::VerifySlh),
+            (
+                Instr::MerkleVerify { a: 0, b: 0, c: 0 },
+                OpCode::MerkleVerify,
+            ),
+            (Instr::VrfVerify { a: 0, b: 0, c: 0 }, OpCode::VrfVerify),
+            (Instr::Kem { a: 0, b: 0, c: 0 }, OpCode::Kem),
+        ];
+        for (instr, op) in cases {
+            let code = program(&[instr, Instr::Halt]);
+            assert_eq!(
+                Interpreter::new(&code, &[], 100_000).run(),
+                Err(Fault::Pending(op))
+            );
+        }
     }
 
     #[test]
