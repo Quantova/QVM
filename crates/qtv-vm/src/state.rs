@@ -66,6 +66,33 @@ impl Machine {
         Some(u64::from_be_bytes(buf))
     }
 
+    /// Borrow a byte region of scratch memory. None when the region is out of bounds.
+    pub fn mem_region(&self, offset: u64, len: u64) -> Option<&[u8]> {
+        let start = usize::try_from(offset).ok()?;
+        let len = usize::try_from(len).ok()?;
+        let end = start.checked_add(len)?;
+        self.mem.get(start..end)
+    }
+
+    /// Copy bytes into scratch memory at a byte offset. False when the region is out of bounds.
+    pub fn mem_write(&mut self, offset: u64, bytes: &[u8]) -> bool {
+        let start = match usize::try_from(offset) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let end = match start.checked_add(bytes.len()) {
+            Some(e) => e,
+            None => return false,
+        };
+        match self.mem.get_mut(start..end) {
+            Some(slot) => {
+                slot.copy_from_slice(bytes);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Write one word to scratch memory at a byte offset. False when the access is out of bounds.
     pub fn mem_store(&mut self, offset: u64, v: u64) -> bool {
         let start = match usize::try_from(offset) {
@@ -116,6 +143,19 @@ mod tests {
         }
         assert!(!m.push(0));
         assert_eq!(m.pop(), Some((STACK_LIMIT - 1) as u64));
+    }
+
+    #[test]
+    fn byte_region_round_trip_and_bounds() {
+        let mut m = Machine::new();
+        assert!(m.mem_write(10, &[1, 2, 3, 4]));
+        assert_eq!(m.mem_region(10, 4), Some(&[1, 2, 3, 4][..]));
+        assert_eq!(m.mem_region(0, MEM_BYTES as u64), Some(&m.mem[..]));
+        assert_eq!(m.mem_region(MEM_BYTES as u64, 1), None);
+        assert_eq!(m.mem_region(0, MEM_BYTES as u64 + 1), None);
+        assert!(!m.mem_write(MEM_BYTES as u64, &[1]));
+        assert!(!m.mem_write(u64::MAX, &[1]));
+        assert_eq!(m.mem_region(4, 0), Some(&[][..]));
     }
 
     #[test]
