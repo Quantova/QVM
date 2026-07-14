@@ -174,6 +174,26 @@ impl<'a> Interpreter<'a> {
                 m.set_reg(d, v);
             }
 
+            Instr::Push { a } => {
+                let v = m.reg(a);
+                if !m.push(v) {
+                    return Err(Fault::StackOverflow);
+                }
+            }
+            Instr::Pop { d } => {
+                let v = m.pop().ok_or(Fault::StackUnderflow)?;
+                m.set_reg(d, v);
+            }
+            Instr::MLoad { d, a } => {
+                let v = m.mem_load(m.reg(a)).ok_or(Fault::BadMemory)?;
+                m.set_reg(d, v);
+            }
+            Instr::MStore { a, b } => {
+                if !m.mem_store(m.reg(a), m.reg(b)) {
+                    return Err(Fault::BadMemory);
+                }
+            }
+
             other => return Err(Fault::Pending(other.opcode())),
         }
         Ok(Step::Next)
@@ -319,5 +339,56 @@ mod tests {
         assert_eq!(out.regs[2], 0);
         assert_eq!(out.regs[3], 1);
         assert_eq!(out.regs[4], 0);
+    }
+
+    #[test]
+    fn stack_push_pop() {
+        let code = program(&[
+            Instr::Ldi { d: 0, imm: 77 },
+            Instr::Push { a: 0 },
+            Instr::Pop { d: 1 },
+            Instr::Halt,
+        ]);
+        let out = Interpreter::new(&code, &[], 100).run().expect("halt");
+        assert_eq!(out.regs[1], 77);
+    }
+
+    #[test]
+    fn pop_empty_faults() {
+        let code = program(&[Instr::Pop { d: 0 }, Instr::Halt]);
+        assert_eq!(
+            Interpreter::new(&code, &[], 100).run(),
+            Err(Fault::StackUnderflow)
+        );
+    }
+
+    #[test]
+    fn memory_store_then_load() {
+        let code = program(&[
+            Instr::Ldi { d: 0, imm: 16 },
+            Instr::Ldi { d: 1, imm: 0xabcd },
+            Instr::MStore { a: 0, b: 1 },
+            Instr::MLoad { d: 2, a: 0 },
+            Instr::Halt,
+        ]);
+        let out = Interpreter::new(&code, &[], 100).run().expect("halt");
+        assert_eq!(out.regs[2], 0xabcd);
+    }
+
+    #[test]
+    fn memory_out_of_bounds_faults() {
+        let code = program(&[
+            Instr::Ldi {
+                d: 0,
+                imm: u64::MAX,
+            },
+            Instr::Ldi { d: 1, imm: 1 },
+            Instr::MStore { a: 0, b: 1 },
+            Instr::Halt,
+        ]);
+        assert_eq!(
+            Interpreter::new(&code, &[], 100).run(),
+            Err(Fault::BadMemory)
+        );
     }
 }
