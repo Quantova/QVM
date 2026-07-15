@@ -15,10 +15,11 @@ pub struct StateAccess {
     pub writes: Vec<u64>,
 }
 
-/// One callable entry named by its selector, with its declared state access.
+/// One callable entry named by its selector, with the code offset it begins at and its declared
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     pub selector: [u8; SELECTOR_BYTES],
+    pub offset: u32,
     pub access: StateAccess,
 }
 
@@ -54,6 +55,7 @@ impl Container {
         put_len(&mut out, self.entries.len());
         for entry in &self.entries {
             out.extend_from_slice(&entry.selector);
+            out.extend_from_slice(&entry.offset.to_be_bytes());
             put_slots(&mut out, &entry.access.reads);
             put_slots(&mut out, &entry.access.writes);
         }
@@ -95,6 +97,7 @@ mod tests {
             vec![10, 20],
             vec![Entry {
                 selector: selector("transfer(Address,u64)"),
+                offset: 0,
                 access: StateAccess {
                     reads: vec![1],
                     writes: vec![2, 3],
@@ -121,6 +124,14 @@ mod tests {
         let a = sample();
         let mut b = sample();
         b.entries[0].access.writes.push(9);
+        assert_ne!(a.identifier(), b.identifier());
+    }
+
+    #[test]
+    fn entry_offset_change_changes_identifier() {
+        let a = sample();
+        let mut b = sample();
+        b.entries[0].offset = 16;
         assert_ne!(a.identifier(), b.identifier());
     }
 
