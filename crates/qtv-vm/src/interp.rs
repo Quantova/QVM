@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use crate::container::{Container, SELECTOR_BYTES};
-use crate::isa::{decode, DecodeError, Instr, OpCode, NUM_REGS};
+use crate::isa::{decode, DecodeError, Instr, NUM_REGS};
 use crate::state::Machine;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,15 +18,22 @@ pub enum Fault {
     BadConst,
     UnknownSelector,
     Decode(DecodeError),
-    Pending(OpCode),
 }
 
-/// The result of a clean halt. State changes are surfaced only on success, so a fault rolls back.
+/// A native effect the machine records for the host to apply after a clean halt. The machine never
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Effect {
+    /// Move `amount` of the native asset to the account named by `to`, the raw address payload.
+    Transfer { to: Vec<u8>, amount: u64 },
+}
+
+/// The result of a clean halt. State changes and recorded effects are surfaced only on success, so a
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Outcome {
     pub regs: [u64; NUM_REGS],
     pub gas_used: u64,
     pub storage: BTreeMap<u64, u64>,
+    pub effects: Vec<Effect>,
 }
 
 /// Internal control flow after a step.
@@ -43,6 +50,7 @@ pub struct Interpreter<'a> {
     gas_limit: u64,
     gas_used: u64,
     storage: BTreeMap<u64, u64>,
+    effects: Vec<Effect>,
 }
 
 impl<'a> Interpreter<'a> {
@@ -54,6 +62,7 @@ impl<'a> Interpreter<'a> {
             gas_limit,
             gas_used: 0,
             storage: BTreeMap::new(),
+            effects: Vec::new(),
         }
     }
 
@@ -110,6 +119,7 @@ impl<'a> Interpreter<'a> {
                         regs: self.machine.regs,
                         gas_used: self.gas_used,
                         storage: self.storage,
+                        effects: self.effects,
                     })
                 }
                 Step::JumpTo(target) => self.machine.pc = target,
@@ -274,8 +284,18 @@ impl<'a> Interpreter<'a> {
                 self.storage.insert(key, val);
             }
 
-            // Message group. Enqueuing an asynchronous message to another contract is pending.
-            Instr::Send { .. } => return Err(Fault::Pending(OpCode::Send)),
+            // Message group. A native transfer is recorded as an outbound effect the host applies, so
+            // the machine never touches a balance. The target account is read from scratch memory at
+            // the offset in a for the length in b, and the amount is in c. The machine records the
+            // effect without checking coverage; the host enforces the balance against the ledger.
+            Instr::Send { a, b, c } => {
+                let amount = m.reg(c);
+                let to = m
+                    .mem_region(m.reg(a), m.reg(b))
+                    .ok_or(Fault::BadMemory)?
+                    .to_vec();
+                self.effects.push(Effect::Transfer { to, amount });
+            }
 
             // Cryptographic group. Each reads its inputs from a scratch memory region and calls the
             // matching post quantum primitive in the crypto crate.
@@ -293,6 +313,7 @@ impl<'a> Interpreter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::isa::OpCode;
     use std::collections::BTreeMap;
 
     fn program(instrs: &[Instr]) -> Vec<u8> {
@@ -563,12 +584,55 @@ mod tests {
     }
 
     #[test]
-    fn message_group_is_pending() {
-        let code = program(&[Instr::Send { a: 0, b: 0, c: 0 }, Instr::Halt]);
+    fn send_records_transfer_effect() {
+        use crate::asm::assemble;
+        // A thirty two byte target account sits at the front of scratch memory. SEND names it by the
+        // offset in r0 and the length in r1, and moves the amount in r2.
+        let account = [0xABu8; 32];
+        let code = assemble("LDI r0, 0\nLDI r1, 32\nLDI r2, 1000\nSEND r0, r1, r2\nHALT")
+            .expect("assemble");
+        let out = Interpreter::new(&code, &[], 1000)
+            .with_memory(&account)
+            .run()
+            .expect("halt");
+        assert_eq!(
+            out.effects,
+            vec![Effect::Transfer {
+                to: account.to_vec(),
+                amount: 1000,
+            }]
+        );
+        assert_eq!(
+            out.gas_used,
+            3 * crate::gas::cost(OpCode::Ldi)
+                + crate::gas::cost(OpCode::Send)
+                + crate::gas::cost(OpCode::Halt)
+        );
+    }
+
+    #[test]
+    fn send_out_of_bounds_target_faults() {
+        let code = program(&[
+            Instr::Ldi {
+                d: 0,
+                imm: u64::MAX,
+            },
+            Instr::Ldi { d: 1, imm: 32 },
+            Instr::Ldi { d: 2, imm: 1 },
+            Instr::Send { a: 0, b: 1, c: 2 },
+            Instr::Halt,
+        ]);
         assert_eq!(
             Interpreter::new(&code, &[], 1000).run(),
-            Err(Fault::Pending(OpCode::Send))
+            Err(Fault::BadMemory)
         );
+    }
+
+    #[test]
+    fn clean_run_records_no_effects() {
+        let code = program(&[Instr::Ldi { d: 0, imm: 1 }, Instr::Halt]);
+        let out = Interpreter::new(&code, &[], 100).run().expect("halt");
+        assert!(out.effects.is_empty());
     }
 
     #[test]
@@ -767,8 +831,11 @@ mod tests {
         assert_eq!(persistent.get(&5), Some(&1));
     }
 
-    fn two_entry_container() -> (crate::container::Container, [u8; SELECTOR_BYTES], [u8; SELECTOR_BYTES])
-    {
+    fn two_entry_container() -> (
+        crate::container::Container,
+        [u8; SELECTOR_BYTES],
+        [u8; SELECTOR_BYTES],
+    ) {
         use crate::container::{selector, Container, Entry, StateAccess};
         // The first entry sets r0 to 111 and halts, the second sets r0 to 222 and halts. The second
         // begins right after the first in the shared code blob.
