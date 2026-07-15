@@ -2,6 +2,9 @@
 
 use crate::isa::OpCode;
 
+/// Gas charged to resolve a call selector to its entry and enter it, before the first instruction of
+pub const DISPATCH: u64 = 4;
+
 /// Gas charged for one instruction. Every cost other than a clean halt is at least one, so a metered
 pub fn cost(op: OpCode) -> u64 {
     match op {
