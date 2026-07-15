@@ -3,6 +3,11 @@
 
 use crate::isa::OpCode;
 
+/// Gas charged to resolve a call selector to its entry and enter it, before the first instruction of
+/// the entry runs. A fixed cost, in the range of a branch, since the resolution is a bounded table
+/// lookup over the container interface.
+pub const DISPATCH: u64 = 4;
+
 /// Gas charged for one instruction. Every cost other than a clean halt is at least one, so a metered
 /// run always makes progress toward its gas bound.
 pub fn cost(op: OpCode) -> u64 {
