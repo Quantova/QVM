@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::container::{Container, SELECTOR_BYTES};
 use crate::isa::{decode, DecodeError, Instr, OpCode, NUM_REGS};
 use crate::state::Machine;
 
@@ -16,6 +17,7 @@ pub enum Fault {
     BadMemory,
     BadJump,
     BadConst,
+    UnknownSelector,
     Decode(DecodeError),
     Pending(OpCode),
 }
@@ -54,6 +56,27 @@ impl<'a> Interpreter<'a> {
             gas_used: 0,
             storage: BTreeMap::new(),
         }
+    }
+
+    /// Build an interpreter that enters the entry named by `selector`. A call to a selector no entry
+    /// carries reverts with `UnknownSelector`. The dispatch is metered, so its cost is charged as the
+    /// run's initial gas and a limit that cannot cover it faults with `OutOfGas`. The single entry
+    /// path stays available through `new`, which enters at offset zero.
+    pub fn for_entry(
+        container: &'a Container,
+        selector: [u8; SELECTOR_BYTES],
+        gas_limit: u64,
+    ) -> Result<Self, Fault> {
+        let offset = container
+            .entry_offset(&selector)
+            .ok_or(Fault::UnknownSelector)?;
+        if crate::gas::DISPATCH > gas_limit {
+            return Err(Fault::OutOfGas);
+        }
+        let mut interp = Interpreter::new(&container.code, &container.consts, gas_limit);
+        interp.machine.pc = offset;
+        interp.gas_used = crate::gas::DISPATCH;
+        Ok(interp)
     }
 
     /// Seed the declared state read set. The interpreter works on this copy and returns it only on
@@ -749,5 +772,79 @@ mod tests {
             .run();
         assert_eq!(res, Err(Fault::OutOfGas));
         assert_eq!(persistent.get(&5), Some(&1));
+    }
+
+    fn two_entry_container() -> (crate::container::Container, [u8; SELECTOR_BYTES], [u8; SELECTOR_BYTES])
+    {
+        use crate::container::{selector, Container, Entry, StateAccess};
+        // The first entry sets r0 to 111 and halts, the second sets r0 to 222 and halts. The second
+        // begins right after the first in the shared code blob.
+        let first = program(&[Instr::Ldi { d: 0, imm: 111 }, Instr::Halt]);
+        let second = program(&[Instr::Ldi { d: 0, imm: 222 }, Instr::Halt]);
+        let offset = first.len() as u32;
+        let mut code = first;
+        code.extend_from_slice(&second);
+        let alpha = selector("alpha()");
+        let beta = selector("beta()");
+        let container = Container::new(
+            code,
+            vec![],
+            vec![
+                Entry {
+                    selector: alpha,
+                    offset: 0,
+                    access: StateAccess::default(),
+                },
+                Entry {
+                    selector: beta,
+                    offset,
+                    access: StateAccess::default(),
+                },
+            ],
+        );
+        (container, alpha, beta)
+    }
+
+    #[test]
+    fn dispatch_enters_entry_named_by_selector() {
+        let (container, alpha, beta) = two_entry_container();
+        let a = Interpreter::for_entry(&container, alpha, 1000)
+            .expect("known selector")
+            .run()
+            .expect("halt");
+        assert_eq!(a.regs[0], 111);
+        let b = Interpreter::for_entry(&container, beta, 1000)
+            .expect("known selector")
+            .run()
+            .expect("halt");
+        assert_eq!(b.regs[0], 222);
+        // The dispatch is metered on top of the entry body.
+        assert_eq!(
+            b.gas_used,
+            crate::gas::DISPATCH + crate::gas::cost(OpCode::Ldi) + crate::gas::cost(OpCode::Halt)
+        );
+    }
+
+    #[test]
+    fn unknown_selector_reverts() {
+        use crate::container::selector;
+        let (container, _alpha, _beta) = two_entry_container();
+        let res = Interpreter::for_entry(&container, selector("missing()"), 1000);
+        assert!(matches!(res, Err(Fault::UnknownSelector)));
+    }
+
+    #[test]
+    fn dispatch_over_the_limit_runs_out_of_gas() {
+        let (container, alpha, _beta) = two_entry_container();
+        let res = Interpreter::for_entry(&container, alpha, crate::gas::DISPATCH - 1);
+        assert!(matches!(res, Err(Fault::OutOfGas)));
+    }
+
+    #[test]
+    fn single_entry_path_enters_at_offset_zero() {
+        // The existing constructor still enters at offset zero with no selector.
+        let code = program(&[Instr::Ldi { d: 0, imm: 7 }, Instr::Halt]);
+        let out = Interpreter::new(&code, &[], 100).run().expect("halt");
+        assert_eq!(out.regs[0], 7);
     }
 }
