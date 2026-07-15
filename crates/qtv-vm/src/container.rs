@@ -66,6 +66,14 @@ impl Container {
     pub fn identifier(&self) -> [u8; 32] {
         sha3_256(&self.canonical_bytes())
     }
+
+    /// Resolve a call selector to the code offset of its entry. None when no entry matches, which a
+    pub fn entry_offset(&self, selector: &[u8; SELECTOR_BYTES]) -> Option<u32> {
+        self.entries
+            .iter()
+            .find(|e| &e.selector == selector)
+            .map(|e| e.offset)
+    }
 }
 
 /// The selector of an entry or event. It is the leading bytes of the SHA3 hash of the canonical
@@ -139,5 +147,28 @@ mod tests {
     fn selector_is_deterministic() {
         assert_eq!(selector("mint(u64)"), selector("mint(u64)"));
         assert_ne!(selector("mint(u64)"), selector("burn(u64)"));
+    }
+
+    #[test]
+    fn entry_offset_resolves_by_selector() {
+        let container = Container::new(
+            vec![],
+            vec![],
+            vec![
+                Entry {
+                    selector: selector("mint(u64)"),
+                    offset: 0,
+                    access: StateAccess::default(),
+                },
+                Entry {
+                    selector: selector("burn(u64)"),
+                    offset: 24,
+                    access: StateAccess::default(),
+                },
+            ],
+        );
+        assert_eq!(container.entry_offset(&selector("mint(u64)")), Some(0));
+        assert_eq!(container.entry_offset(&selector("burn(u64)")), Some(24));
+        assert_eq!(container.entry_offset(&selector("pause()")), None);
     }
 }
