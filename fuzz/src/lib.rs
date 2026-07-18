@@ -20,10 +20,10 @@ impl Rng {
     }
 
     fn next_u64(&mut self) -> u64 {
-        self.state = self.state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        self.state = self.state.wrapping_add(11400714819323198485);
         let mut z = self.state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z = (z ^ (z >> 30)).wrapping_mul(13787848793156543929);
+        z = (z ^ (z >> 27)).wrapping_mul(10723151780598845931);
         z ^ (z >> 31)
     }
 
@@ -160,7 +160,7 @@ fn exercise(code: &[u8], consts: &[u64]) {
 /// Run a batch of random inputs. Half are raw random bytes, half are random valid programs. A panic
 /// in any case fails the batch.
 pub fn run_batch(seed: u64, count: usize) {
-    let mut rng = Rng::new(seed ^ 0xa5a5_a5a5_a5a5_a5a5);
+    let mut rng = Rng::new(seed ^ 11936128518282651045);
     for i in 0..count {
         let consts = rand_consts(&mut rng);
         let code = if i % 2 == 0 {
@@ -179,7 +179,7 @@ mod tests {
 
     #[test]
     fn batch_never_panics() {
-        run_batch(0x0102_0304_0506_0708, 5000);
+        run_batch(72623859790382856, 5000);
     }
 
     #[test]

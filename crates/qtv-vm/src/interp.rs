@@ -488,13 +488,13 @@ mod tests {
     fn memory_store_then_load() {
         let code = program(&[
             Instr::Ldi { d: 0, imm: 16 },
-            Instr::Ldi { d: 1, imm: 0xabcd },
+            Instr::Ldi { d: 1, imm: 43981 },
             Instr::MStore { a: 0, b: 1 },
             Instr::MLoad { d: 2, a: 0 },
             Instr::Halt,
         ]);
         let out = Interpreter::new(&code, &[], 100).run().expect("halt");
-        assert_eq!(out.regs[2], 0xabcd);
+        assert_eq!(out.regs[2], 43981);
     }
 
     #[test]
@@ -598,7 +598,7 @@ mod tests {
         use crate::asm::assemble;
         // A thirty two byte target account sits at the front of scratch memory. SEND names it by the
         // offset in r0 and the length in r1, and moves the amount in r2.
-        let account = [0xABu8; 32];
+        let account = [171u8; 32];
         let code = assemble("LDI r0, 0\nLDI r1, 32\nLDI r2, 1000\nSEND r0, r1, r2\nHALT")
             .expect("assemble");
         let out = Interpreter::new(&code, &[], 1000)
@@ -647,7 +647,7 @@ mod tests {
 
     #[test]
     fn hash_opcode_runs_metered() {
-        let word: u64 = 0x0102_0304_0506_0708;
+        let word: u64 = 72623859790382856;
         let code = program(&[
             Instr::Ldi { d: 0, imm: 0 },
             Instr::Ldi { d: 1, imm: word },
