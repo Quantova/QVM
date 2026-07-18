@@ -161,8 +161,8 @@ mod tests {
     #[test]
     fn memory_round_trip_and_bounds() {
         let mut m = Machine::new();
-        assert!(m.mem_store(0, 0x0102_0304_0506_0708));
-        assert_eq!(m.mem_load(0), Some(0x0102_0304_0506_0708));
+        assert!(m.mem_store(0, 72623859790382856));
+        assert_eq!(m.mem_load(0), Some(72623859790382856));
         assert_eq!(m.mem_load((MEM_BYTES - WORD_BYTES + 1) as u64), None);
         assert!(!m.mem_store(u64::MAX, 1));
     }

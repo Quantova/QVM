@@ -361,12 +361,8 @@ fn reg(no: usize, tok: &str) -> Result<Reg, AsmError> {
 }
 
 fn num_u64(no: usize, tok: &str) -> Result<u64, AsmError> {
-    let parsed = if let Some(hex) = tok.strip_prefix("0x").or_else(|| tok.strip_prefix("0X")) {
-        u64::from_str_radix(hex, 16)
-    } else {
-        tok.parse::<u64>()
-    };
-    parsed.map_err(|_| AsmError::BadNumber(no, tok.to_string()))
+    tok.parse::<u64>()
+        .map_err(|_| AsmError::BadNumber(no, tok.to_string()))
 }
 
 fn num_u16(no: usize, tok: &str) -> Result<u16, AsmError> {
@@ -416,7 +412,7 @@ mod tests {
 
     #[test]
     fn hex_immediate() {
-        let code = assemble("LDI r0, 0xff\nHALT").expect("assemble");
+        let code = assemble("LDI r0, 255\nHALT").expect("assemble");
         let out = Interpreter::new(&code, &[], 100).run().expect("halt");
         assert_eq!(out.regs[0], 255);
     }

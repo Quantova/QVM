@@ -101,7 +101,7 @@ mod tests {
 
     fn sample() -> Container {
         Container::new(
-            vec![0x00, 0x01, 0x02],
+            vec![0, 1, 2],
             vec![10, 20],
             vec![Entry {
                 selector: selector("transfer(Address,u64)"),
@@ -123,7 +123,7 @@ mod tests {
     fn code_change_changes_identifier() {
         let a = sample();
         let mut b = sample();
-        b.code.push(0x03);
+        b.code.push(3);
         assert_ne!(a.identifier(), b.identifier());
     }
 
