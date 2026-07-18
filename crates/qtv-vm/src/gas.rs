@@ -27,6 +27,7 @@ pub fn cost(op: OpCode) -> u64 {
         OpCode::AddW => 2,
         OpCode::SubW => 2,
         OpCode::MulW => 3,
+        OpCode::MulHi => 3,
 
         OpCode::And => 1,
         OpCode::Or => 1,
@@ -86,6 +87,7 @@ mod tests {
             Instr::AddW { d: 0, a: 0, b: 0 },
             Instr::SubW { d: 0, a: 0, b: 0 },
             Instr::MulW { d: 0, a: 0, b: 0 },
+            Instr::MulHi { d: 0, a: 0, b: 0 },
             Instr::And { d: 0, a: 0, b: 0 },
             Instr::Or { d: 0, a: 0, b: 0 },
             Instr::Xor { d: 0, a: 0, b: 0 },

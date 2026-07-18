@@ -152,6 +152,10 @@ fn parse_instr(
             want(3)?;
             triple(no, &ops, Triple::MulW)?
         }
+        "MULHI" => {
+            want(3)?;
+            triple(no, &ops, Triple::MulHi)?
+        }
         "AND" => {
             want(3)?;
             triple(no, &ops, Triple::And)?
@@ -299,6 +303,7 @@ enum Triple {
     AddW,
     SubW,
     MulW,
+    MulHi,
     And,
     Or,
     Xor,
@@ -329,6 +334,7 @@ fn triple(no: usize, ops: &[&str], kind: Triple) -> Result<Instr, AsmError> {
         Triple::AddW => Instr::AddW { d, a, b },
         Triple::SubW => Instr::SubW { d, a, b },
         Triple::MulW => Instr::MulW { d, a, b },
+        Triple::MulHi => Instr::MulHi { d, a, b },
         Triple::And => Instr::And { d, a, b },
         Triple::Or => Instr::Or { d, a, b },
         Triple::Xor => Instr::Xor { d, a, b },
