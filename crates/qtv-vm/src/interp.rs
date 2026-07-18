@@ -184,6 +184,10 @@ impl<'a> Interpreter<'a> {
                 let v = m.reg(a).wrapping_mul(m.reg(b));
                 m.set_reg(d, v);
             }
+            Instr::MulHi { d, a, b } => {
+                let v = ((m.reg(a) as u128 * m.reg(b) as u128) >> 64) as u64;
+                m.set_reg(d, v);
+            }
 
             Instr::And { d, a, b } => {
                 let v = m.reg(a) & m.reg(b);
@@ -349,6 +353,20 @@ mod tests {
         let out = Interpreter::new(&code, &[], 100).run().expect("halt");
         assert_eq!(out.regs[2], 12);
         assert_eq!(out.gas_used, 1 + 1 + 2);
+    }
+
+    #[test]
+    fn mulhi_gives_the_high_half() {
+        let code = program(&[
+            Instr::Ldi { d: 0, imm: 1u64 << 32 },
+            Instr::Ldi { d: 1, imm: 1u64 << 32 },
+            Instr::MulHi { d: 2, a: 0, b: 1 },
+            Instr::MulW { d: 3, a: 0, b: 1 },
+            Instr::Halt,
+        ]);
+        let out = Interpreter::new(&code, &[], 100).run().expect("halt");
+        assert_eq!(out.regs[2], 1);
+        assert_eq!(out.regs[3], 0);
     }
 
     #[test]

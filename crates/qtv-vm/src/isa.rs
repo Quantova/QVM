@@ -23,6 +23,7 @@ pub enum OpCode {
     AddW = 24,
     SubW = 25,
     MulW = 26,
+    MulHi = 27,
 
     And = 32,
     Or = 33,
@@ -74,6 +75,7 @@ impl OpCode {
             24 => OpCode::AddW,
             25 => OpCode::SubW,
             26 => OpCode::MulW,
+            27 => OpCode::MulHi,
             32 => OpCode::And,
             33 => OpCode::Or,
             34 => OpCode::Xor,
@@ -124,6 +126,7 @@ pub enum Instr {
     AddW { d: Reg, a: Reg, b: Reg },
     SubW { d: Reg, a: Reg, b: Reg },
     MulW { d: Reg, a: Reg, b: Reg },
+    MulHi { d: Reg, a: Reg, b: Reg },
 
     And { d: Reg, a: Reg, b: Reg },
     Or { d: Reg, a: Reg, b: Reg },
@@ -182,6 +185,7 @@ impl Instr {
             Instr::AddW { .. } => OpCode::AddW,
             Instr::SubW { .. } => OpCode::SubW,
             Instr::MulW { .. } => OpCode::MulW,
+            Instr::MulHi { .. } => OpCode::MulHi,
             Instr::And { .. } => OpCode::And,
             Instr::Or { .. } => OpCode::Or,
             Instr::Xor { .. } => OpCode::Xor,
@@ -243,6 +247,7 @@ impl Instr {
             | Instr::AddW { d, a, b }
             | Instr::SubW { d, a, b }
             | Instr::MulW { d, a, b }
+            | Instr::MulHi { d, a, b }
             | Instr::And { d, a, b }
             | Instr::Or { d, a, b }
             | Instr::Xor { d, a, b }
@@ -362,6 +367,11 @@ pub fn decode(code: &[u8], pc: usize) -> Result<(Instr, usize), DecodeError> {
             b: c.reg()?,
         },
         OpCode::MulW => Instr::MulW {
+            d: c.reg()?,
+            a: c.reg()?,
+            b: c.reg()?,
+        },
+        OpCode::MulHi => Instr::MulHi {
             d: c.reg()?,
             a: c.reg()?,
             b: c.reg()?,
