@@ -50,6 +50,7 @@ pub fn cost(op: OpCode) -> u64 {
         OpCode::SStore => 500,
 
         OpCode::Send => 200,
+        OpCode::Emit => 200,
 
         // Fixed costs scaled from the primitive throughput benchmark in the crypto crate,
         // benches/throughput.rs, whose per operation timings calibrate the gas. The hash based
@@ -105,6 +106,7 @@ mod tests {
             Instr::SLoad { d: 0, a: 0 },
             Instr::SStore { a: 0, b: 0 },
             Instr::Send { a: 0, b: 0, c: 0 },
+            Instr::Emit { a: 0, b: 0, c: 0 },
             Instr::Hash { a: 0, b: 0, c: 0 },
             Instr::VerifyMl { a: 0, b: 0, c: 0 },
             Instr::VerifySlh { a: 0, b: 0, c: 0 },

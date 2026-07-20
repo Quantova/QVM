@@ -190,6 +190,10 @@ fn parse_instr(
             want(3)?;
             triple(no, &ops, Triple::Send)?
         }
+        "EMIT" => {
+            want(3)?;
+            triple(no, &ops, Triple::Emit)?
+        }
         "HASH" => {
             want(3)?;
             triple(no, &ops, Triple::Hash)?
@@ -311,6 +315,7 @@ enum Triple {
     LtU,
     GtU,
     Send,
+    Emit,
     Hash,
     VerifyMl,
     VerifySlh,
@@ -342,6 +347,7 @@ fn triple(no: usize, ops: &[&str], kind: Triple) -> Result<Instr, AsmError> {
         Triple::LtU => Instr::LtU { d, a, b },
         Triple::GtU => Instr::GtU { d, a, b },
         Triple::Send => Instr::Send { a: d, b: a, c: b },
+        Triple::Emit => Instr::Emit { a: d, b: a, c: b },
         Triple::Hash => Instr::Hash { a: d, b: a, c: b },
         Triple::VerifyMl => Instr::VerifyMl { a: d, b: a, c: b },
         Triple::VerifySlh => Instr::VerifySlh { a: d, b: a, c: b },

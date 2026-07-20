@@ -50,6 +50,7 @@ pub enum OpCode {
     SStore = 81,
 
     Send = 96,
+    Emit = 97,
 
     Hash = 112,
     VerifyMl = 113,
@@ -97,6 +98,7 @@ impl OpCode {
             80 => OpCode::SLoad,
             81 => OpCode::SStore,
             96 => OpCode::Send,
+            97 => OpCode::Emit,
             112 => OpCode::Hash,
             113 => OpCode::VerifyMl,
             114 => OpCode::VerifySlh,
@@ -153,6 +155,7 @@ pub enum Instr {
     SStore { a: Reg, b: Reg },
 
     Send { a: Reg, b: Reg, c: Reg },
+    Emit { a: Reg, b: Reg, c: Reg },
 
     Hash { a: Reg, b: Reg, c: Reg },
     VerifyMl { a: Reg, b: Reg, c: Reg },
@@ -207,6 +210,7 @@ impl Instr {
             Instr::SLoad { .. } => OpCode::SLoad,
             Instr::SStore { .. } => OpCode::SStore,
             Instr::Send { .. } => OpCode::Send,
+            Instr::Emit { .. } => OpCode::Emit,
             Instr::Hash { .. } => OpCode::Hash,
             Instr::VerifyMl { .. } => OpCode::VerifyMl,
             Instr::VerifySlh { .. } => OpCode::VerifySlh,
@@ -270,6 +274,7 @@ impl Instr {
                 out.extend_from_slice(&target.to_be_bytes());
             }
             Instr::Send { a, b, c }
+            | Instr::Emit { a, b, c }
             | Instr::Hash { a, b, c }
             | Instr::VerifyMl { a, b, c }
             | Instr::VerifySlh { a, b, c }
@@ -433,6 +438,11 @@ pub fn decode(code: &[u8], pc: usize) -> Result<(Instr, usize), DecodeError> {
             b: c.reg()?,
             c: c.reg()?,
         },
+        OpCode::Emit => Instr::Emit {
+            a: c.reg()?,
+            b: c.reg()?,
+            c: c.reg()?,
+        },
         OpCode::Hash => Instr::Hash {
             a: c.reg()?,
             b: c.reg()?,
@@ -532,6 +542,7 @@ mod tests {
             Instr::AddW { d: 5, a: 6, b: 7 },
             Instr::SubW { d: 5, a: 6, b: 7 },
             Instr::MulW { d: 5, a: 6, b: 7 },
+            Instr::MulHi { d: 5, a: 6, b: 7 },
             Instr::And { d: 8, a: 9, b: 10 },
             Instr::Or { d: 8, a: 9, b: 10 },
             Instr::Xor { d: 8, a: 9, b: 10 },
@@ -574,6 +585,7 @@ mod tests {
             Instr::SLoad { d: 3, a: 4 },
             Instr::SStore { a: 3, b: 4 },
             Instr::Send { a: 1, b: 2, c: 3 },
+            Instr::Emit { a: 1, b: 2, c: 3 },
             Instr::Hash { a: 1, b: 2, c: 3 },
             Instr::VerifyMl { a: 1, b: 2, c: 3 },
             Instr::VerifySlh { a: 1, b: 2, c: 3 },
