@@ -28,6 +28,13 @@ pub enum Fault {
 pub enum Effect {
     /// Move `amount` of the native asset to the account named by `to`, the raw address payload.
     Transfer { to: Vec<u8>, amount: u64 },
+    /// Append a typed event to the block event trie. `selector` is the event's interface selector and
+    /// `data` is the encoded operand payload the host indexes and a light client proves against the
+    /// event root. Like a transfer it is a recorded effect, so a fault records nothing.
+    Event {
+        selector: [u8; SELECTOR_BYTES],
+        data: Vec<u8>,
+    },
 }
 
 /// The result of a clean halt. State changes and recorded effects are surfaced only on success, so a
@@ -309,6 +316,19 @@ impl<'a> Interpreter<'a> {
                     .ok_or(Fault::BadMemory)?
                     .to_vec();
                 self.effects.push(Effect::Transfer { to, amount });
+            }
+
+            // The event group. An emit records a typed event the host appends to the block event trie.
+            // The payload is read from scratch memory at the offset in a for the length in b, and the
+            // event selector is the low four bytes of c. Like a transfer it is a recorded effect, so a
+            // fault records nothing and a clean halt surfaces the events in emission order.
+            Instr::Emit { a, b, c } => {
+                let selector = (m.reg(c) as u32).to_be_bytes();
+                let data = m
+                    .mem_region(m.reg(a), m.reg(b))
+                    .ok_or(Fault::BadMemory)?
+                    .to_vec();
+                self.effects.push(Effect::Event { selector, data });
             }
 
             // Cryptographic group. Each reads its inputs from a scratch memory region and calls the
@@ -661,6 +681,48 @@ mod tests {
         let code = program(&[Instr::Ldi { d: 0, imm: 1 }, Instr::Halt]);
         let out = Interpreter::new(&code, &[], 100).run().expect("halt");
         assert!(out.effects.is_empty());
+    }
+
+    #[test]
+    fn emit_records_event_effect() {
+        use crate::asm::assemble;
+        // A sixteen byte payload sits at the front of scratch memory. EMIT names it by the offset in
+        // r0 and the length in r1, and carries the four byte event selector in the low bytes of r2.
+        let payload = [7u8; 16];
+        let selector: u32 = 2882343476;
+        let code = assemble(&format!(
+            "LDI r0, 0\nLDI r1, 16\nLDI r2, {selector}\nEMIT r0, r1, r2\nHALT"
+        ))
+        .expect("assemble");
+        let out = Interpreter::new(&code, &[], 1000)
+            .with_memory(&payload)
+            .run()
+            .expect("halt");
+        assert_eq!(
+            out.effects,
+            vec![Effect::Event {
+                selector: selector.to_be_bytes(),
+                data: payload.to_vec(),
+            }]
+        );
+    }
+
+    #[test]
+    fn emit_out_of_bounds_payload_faults() {
+        let code = program(&[
+            Instr::Ldi {
+                d: 0,
+                imm: u64::MAX,
+            },
+            Instr::Ldi { d: 1, imm: 16 },
+            Instr::Ldi { d: 2, imm: 1 },
+            Instr::Emit { a: 0, b: 1, c: 2 },
+            Instr::Halt,
+        ]);
+        assert_eq!(
+            Interpreter::new(&code, &[], 1000).run(),
+            Err(Fault::BadMemory)
+        );
     }
 
     #[test]
