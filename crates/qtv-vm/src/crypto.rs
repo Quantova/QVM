@@ -7,6 +7,11 @@ use crate::interp::Fault;
 use crate::isa::Reg;
 use crate::state::Machine;
 
+/// The scheme identifier of the module lattice signature, ML-DSA. It matches the chain account model
+pub const SCHEME_ML_DSA: u64 = 1;
+/// The scheme identifier of the hash based signature, SLH-DSA.
+pub const SCHEME_SLH_DSA: u64 = 2;
+
 /// SHA3 256 of a scratch memory region. Register `a` holds the input pointer, `b` the input length,
 pub(crate) fn hash(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), Fault> {
     let ptr = m.reg(a);
@@ -162,9 +167,112 @@ pub(crate) fn kem(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), Fault> 
     Ok(())
 }
 
+/// Derive an account address from a signature region. Register `a` holds the region pointer, with the
+pub(crate) fn address(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), Fault> {
+    let ptr = m.reg(a);
+    let scheme = m.reg(b);
+    let out = m.reg(c);
+    let pk_len = match scheme {
+        SCHEME_ML_DSA => ml_dsa::PUBLIC_KEY_BYTES,
+        SCHEME_SLH_DSA => slh_dsa::PUBLIC_KEY_BYTES,
+        _ => return Err(Fault::BadScheme),
+    };
+    let digest = {
+        let pk = m.mem_region(ptr, pk_len as u64).ok_or(Fault::BadMemory)?;
+        let mut input = Vec::with_capacity(1 + pk_len);
+        input.push(scheme as u8);
+        input.extend_from_slice(pk);
+        sha3_256(&input)
+    };
+    if !m.mem_write(out, &digest) {
+        return Err(Fault::BadMemory);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The address the chain would derive from a scheme byte and a public key, recomputed here so the
+    // opcode is checked against the account model preimage rather than against itself.
+    fn expected_address(scheme: u8, public_key: &[u8]) -> [u8; 32] {
+        let mut input = Vec::with_capacity(1 + public_key.len());
+        input.push(scheme);
+        input.extend_from_slice(public_key);
+        sha3_256(&input)
+    }
+
+    #[test]
+    fn address_matches_the_account_model_for_ml_dsa() {
+        let (pk, _sk) = ml_dsa::keygen(&[7u8; 32]);
+        // The region is the public key then anything; the opcode reads only the public key prefix.
+        let mut region = pk.to_vec();
+        region.extend_from_slice(b"signature and message follow the key");
+        let mut m = Machine::new();
+        assert!(m.mem_write(0, &region));
+        m.set_reg(0, 0);
+        m.set_reg(1, SCHEME_ML_DSA);
+        m.set_reg(2, 40000);
+        address(&mut m, 0, 1, 2).expect("derive");
+        assert_eq!(
+            m.mem_region(40000, 32).unwrap(),
+            &expected_address(1, &pk)[..]
+        );
+    }
+
+    #[test]
+    fn address_matches_the_account_model_for_slh_dsa() {
+        let (_sk, pk) = slh_dsa::keygen(&[1u8; 24], &[2u8; 24], &[3u8; 24]);
+        let mut m = Machine::new();
+        assert!(m.mem_write(0, &pk));
+        m.set_reg(0, 0);
+        m.set_reg(1, SCHEME_SLH_DSA);
+        m.set_reg(2, 40000);
+        address(&mut m, 0, 1, 2).expect("derive");
+        assert_eq!(
+            m.mem_region(40000, 32).unwrap(),
+            &expected_address(2, &pk)[..]
+        );
+    }
+
+    #[test]
+    fn a_different_public_key_derives_a_different_address() {
+        let (pk_a, _) = ml_dsa::keygen(&[1u8; 32]);
+        let (pk_b, _) = ml_dsa::keygen(&[2u8; 32]);
+        let derive = |pk: &[u8]| {
+            let mut m = Machine::new();
+            assert!(m.mem_write(0, pk));
+            m.set_reg(0, 0);
+            m.set_reg(1, SCHEME_ML_DSA);
+            m.set_reg(2, 40000);
+            address(&mut m, 0, 1, 2).expect("derive");
+            m.mem_region(40000, 32).unwrap().to_vec()
+        };
+        assert_ne!(derive(&pk_a), derive(&pk_b));
+    }
+
+    #[test]
+    fn an_unknown_scheme_faults() {
+        let (pk, _) = ml_dsa::keygen(&[9u8; 32]);
+        let mut m = Machine::new();
+        assert!(m.mem_write(0, &pk));
+        m.set_reg(0, 0);
+        m.set_reg(1, 3); // reserved FN-DSA, no address derivation in the tagged machine
+        m.set_reg(2, 40000);
+        assert_eq!(address(&mut m, 0, 1, 2), Err(Fault::BadScheme));
+    }
+
+    #[test]
+    fn a_region_too_short_for_the_public_key_faults() {
+        let mut m = Machine::new();
+        m.set_reg(0, 0);
+        m.set_reg(1, SCHEME_ML_DSA);
+        m.set_reg(2, 40000);
+        // The public key runs off the end of memory from a pointer near the top.
+        m.set_reg(0, (crate::state::MEM_BYTES - 16) as u64);
+        assert_eq!(address(&mut m, 0, 1, 2), Err(Fault::BadMemory));
+    }
 
     fn machine_with(region: &[u8], at: u64) -> Machine {
         let mut m = Machine::new();

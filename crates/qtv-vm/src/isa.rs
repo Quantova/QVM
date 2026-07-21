@@ -58,6 +58,7 @@ pub enum OpCode {
     MerkleVerify = 115,
     VrfVerify = 116,
     Kem = 117,
+    Addr = 118,
 }
 
 impl OpCode {
@@ -105,6 +106,7 @@ impl OpCode {
             115 => OpCode::MerkleVerify,
             116 => OpCode::VrfVerify,
             117 => OpCode::Kem,
+            118 => OpCode::Addr,
             _ => return None,
         };
         Some(op)
@@ -163,6 +165,8 @@ pub enum Instr {
     MerkleVerify { a: Reg, b: Reg, c: Reg },
     VrfVerify { a: Reg, b: Reg, c: Reg },
     Kem { a: Reg, b: Reg, c: Reg },
+    /// Derive an account address from a signature region. `a` points at the region (public key first),
+    Addr { a: Reg, b: Reg, c: Reg },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -217,6 +221,7 @@ impl Instr {
             Instr::MerkleVerify { .. } => OpCode::MerkleVerify,
             Instr::VrfVerify { .. } => OpCode::VrfVerify,
             Instr::Kem { .. } => OpCode::Kem,
+            Instr::Addr { .. } => OpCode::Addr,
         }
     }
 
@@ -280,7 +285,8 @@ impl Instr {
             | Instr::VerifySlh { a, b, c }
             | Instr::MerkleVerify { a, b, c }
             | Instr::VrfVerify { a, b, c }
-            | Instr::Kem { a, b, c } => {
+            | Instr::Kem { a, b, c }
+            | Instr::Addr { a, b, c } => {
                 out.push(a);
                 out.push(b);
                 out.push(c);
@@ -473,6 +479,11 @@ pub fn decode(code: &[u8], pc: usize) -> Result<(Instr, usize), DecodeError> {
             b: c.reg()?,
             c: c.reg()?,
         },
+        OpCode::Addr => Instr::Addr {
+            a: c.reg()?,
+            b: c.reg()?,
+            c: c.reg()?,
+        },
     };
     Ok((instr, c.at - pc))
 }
@@ -592,6 +603,7 @@ mod tests {
             Instr::MerkleVerify { a: 1, b: 2, c: 3 },
             Instr::VrfVerify { a: 1, b: 2, c: 3 },
             Instr::Kem { a: 1, b: 2, c: 3 },
+            Instr::Addr { a: 1, b: 2, c: 3 },
         ]
     }
 

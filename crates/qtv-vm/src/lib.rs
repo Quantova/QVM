@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod abi;
 pub mod asm;
 pub mod container;
 pub mod crypto;
