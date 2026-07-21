@@ -1,11 +1,8 @@
-//! Fixed gas schedule. Every implemented instruction has one deterministic cost. The cost of a
 
 use crate::isa::OpCode;
 
-/// Gas charged to resolve a call selector to its entry and enter it, before the first instruction of
 pub const DISPATCH: u64 = 4;
 
-/// Gas charged for one instruction. Every cost other than a clean halt is at least one, so a metered
 pub fn cost(op: OpCode) -> u64 {
     match op {
         OpCode::Halt => 0,
@@ -52,16 +49,12 @@ pub fn cost(op: OpCode) -> u64 {
         OpCode::Send => 200,
         OpCode::Emit => 200,
 
-        // Fixed costs scaled from the primitive throughput benchmark in the crypto crate,
-        // benches/throughput.rs, whose per operation timings calibrate the gas. The hash based
-        // schemes cost far more than the lattice ones, matching their measured verify times.
         OpCode::Hash => 32,
         OpCode::VerifyMl => 1600,
         OpCode::VerifySlh => 64000,
         OpCode::MerkleVerify => 512,
         OpCode::VrfVerify => 66000,
         OpCode::Kem => 640,
-        // One SHA3 over a scheme byte and a public key, in the range of the plain hash it reduces to.
         OpCode::Addr => 64,
     }
 }

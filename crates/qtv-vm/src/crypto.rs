@@ -1,4 +1,3 @@
-//! Cryptographic opcode group. Each opcode reads its inputs from a scratch memory region addressed
 
 use qtv_crypto::sha3::sha3_256;
 use qtv_crypto::{ml_dsa, ml_kem, slh_dsa, vrf};
@@ -7,12 +6,9 @@ use crate::interp::Fault;
 use crate::isa::Reg;
 use crate::state::Machine;
 
-/// The scheme identifier of the module lattice signature, ML-DSA. It matches the chain account model
 pub const SCHEME_ML_DSA: u64 = 1;
-/// The scheme identifier of the hash based signature, SLH-DSA.
 pub const SCHEME_SLH_DSA: u64 = 2;
 
-/// SHA3 256 of a scratch memory region. Register `a` holds the input pointer, `b` the input length,
 pub(crate) fn hash(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), Fault> {
     let ptr = m.reg(a);
     let len = m.reg(b);
@@ -27,7 +23,6 @@ pub(crate) fn hash(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), Fault>
     Ok(())
 }
 
-/// ML-DSA verify. Register `a` holds the input pointer, `b` the input length, and `c` the
 pub(crate) fn verify_ml(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), Fault> {
     const PK: usize = ml_dsa::PUBLIC_KEY_BYTES;
     const SIG: usize = ml_dsa::SIGNATURE_BYTES;
@@ -49,7 +44,6 @@ pub(crate) fn verify_ml(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), F
     Ok(())
 }
 
-/// SLH-DSA verify. Register `a` holds the input pointer, `b` the input length, and `c` the
 pub(crate) fn verify_slh(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), Fault> {
     const PK: usize = slh_dsa::PUBLIC_KEY_BYTES;
     const SIG: usize = slh_dsa::SIGNATURE_BYTES;
@@ -72,7 +66,6 @@ pub(crate) fn verify_slh(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), 
     Ok(())
 }
 
-/// Merkle proof verify. Register `a` holds the input pointer, `b` the input length, and `c` the
 pub(crate) fn merkle_verify(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), Fault> {
     const H: usize = 32;
     const HEADER: usize = 2 * H + 8;
@@ -113,7 +106,6 @@ pub(crate) fn merkle_verify(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(
     Ok(())
 }
 
-/// Random function verify. Register `a` holds the input pointer, `b` the input length, and `c` the
 pub(crate) fn verify_vrf(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), Fault> {
     const PK: usize = vrf::PUBLIC_KEY_BYTES;
     const OUT: usize = vrf::OUTPUT_BYTES;
@@ -139,7 +131,6 @@ pub(crate) fn verify_vrf(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), 
     Ok(())
 }
 
-/// Key encapsulation. Register `a` holds the input pointer, `b` the input length, and `c` the output
 pub(crate) fn kem(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), Fault> {
     const EK: usize = ml_kem::ENCAPS_KEY_BYTES;
     const MSG: usize = ml_kem::SEED_BYTES;
@@ -167,7 +158,6 @@ pub(crate) fn kem(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), Fault> 
     Ok(())
 }
 
-/// Derive an account address from a signature region. Register `a` holds the region pointer, with the
 pub(crate) fn address(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), Fault> {
     let ptr = m.reg(a);
     let scheme = m.reg(b);
@@ -194,8 +184,6 @@ pub(crate) fn address(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), Fau
 mod tests {
     use super::*;
 
-    // The address the chain would derive from a scheme byte and a public key, recomputed here so the
-    // opcode is checked against the account model preimage rather than against itself.
     fn expected_address(scheme: u8, public_key: &[u8]) -> [u8; 32] {
         let mut input = Vec::with_capacity(1 + public_key.len());
         input.push(scheme);
@@ -206,7 +194,6 @@ mod tests {
     #[test]
     fn address_matches_the_account_model_for_ml_dsa() {
         let (pk, _sk) = ml_dsa::keygen(&[7u8; 32]);
-        // The region is the public key then anything; the opcode reads only the public key prefix.
         let mut region = pk.to_vec();
         region.extend_from_slice(b"signature and message follow the key");
         let mut m = Machine::new();
@@ -269,7 +256,6 @@ mod tests {
         m.set_reg(0, 0);
         m.set_reg(1, SCHEME_ML_DSA);
         m.set_reg(2, 40000);
-        // The public key runs off the end of memory from a pointer near the top.
         m.set_reg(0, (crate::state::MEM_BYTES - 16) as u64);
         assert_eq!(address(&mut m, 0, 1, 2), Err(Fault::BadMemory));
     }
@@ -311,8 +297,6 @@ mod tests {
         assert_eq!(hash(&mut m, 0, 1, 2), Err(Fault::BadMemory));
     }
 
-    // Build a public key, signature, message region and load it at offset zero, returning the region
-    // length. Register 0 points at the region and register 1 holds its length.
     fn load_ml(m: &mut Machine, pk: &[u8], sig: &[u8], msg: &[u8]) -> u64 {
         let mut region = Vec::new();
         region.extend_from_slice(pk);
@@ -351,7 +335,6 @@ mod tests {
         assert_eq!(verify_ml(&mut m, 0, 1, 2), Err(Fault::BadMemory));
     }
 
-    // Load a public key, signature, message region at offset zero for a verify opcode.
     fn load_region(m: &mut Machine, parts: &[&[u8]]) {
         let mut region = Vec::new();
         for part in parts {
@@ -389,7 +372,6 @@ mod tests {
         assert_eq!(verify_slh(&mut m, 0, 1, 2), Err(Fault::BadMemory));
     }
 
-    // The SHA3 256 parent of two ordered child digests.
     fn node(left: &[u8], right: &[u8]) -> [u8; 32] {
         let mut pair = [0u8; 64];
         pair[..32].copy_from_slice(left);
@@ -415,7 +397,6 @@ mod tests {
         let p23 = node(&leaves[2], &leaves[3]);
         let root = node(&p01, &p23);
 
-        // Proof for the leaf at index two, siblings from the leaf upward.
         let path = [leaves[3], p01];
         let region = merkle_region(&root, 2, &leaves[2], &path);
 
@@ -493,9 +474,7 @@ mod tests {
         let shared = &out[..ml_kem::SHARED_SECRET_BYTES];
         let ciphertext: [u8; ml_kem::CIPHERTEXT_BYTES] =
             out[ml_kem::SHARED_SECRET_BYTES..].try_into().unwrap();
-        // The encapsulated shared secret decapsulates to the same value.
         assert_eq!(&ml_kem::decaps(&dk, &ciphertext)[..], shared);
-        // And it equals a direct encapsulation with the crypto crate.
         let (want_ss, want_ct) = ml_kem::encaps(&ek, &msg);
         assert_eq!(shared, &want_ss[..]);
         assert_eq!(&ciphertext[..], &want_ct[..]);

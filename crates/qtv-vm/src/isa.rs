@@ -1,9 +1,6 @@
-//! Instruction set. Opcodes have a fixed byte encoding over 64 bit words.
 
-/// Number of general registers. A register operand outside this range is a decode fault.
 pub const NUM_REGS: usize = 16;
 
-/// A register index. Valid values are `0..NUM_REGS`.
 pub type Reg = u8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,7 +110,6 @@ impl OpCode {
     }
 }
 
-/// A decoded instruction with its operands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Instr {
     Halt,
@@ -165,7 +161,6 @@ pub enum Instr {
     MerkleVerify { a: Reg, b: Reg, c: Reg },
     VrfVerify { a: Reg, b: Reg, c: Reg },
     Kem { a: Reg, b: Reg, c: Reg },
-    /// Derive an account address from a signature region. `a` points at the region (public key first),
     Addr { a: Reg, b: Reg, c: Reg },
 }
 
@@ -301,7 +296,6 @@ impl Instr {
     }
 }
 
-/// Decode one instruction at `pc`. Returns the instruction and the number of bytes consumed.
 pub fn decode(code: &[u8], pc: usize) -> Result<(Instr, usize), DecodeError> {
     let mut c = Cursor { code, at: pc };
     let op_byte = c.byte()?;

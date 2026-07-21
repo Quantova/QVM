@@ -1,26 +1,18 @@
-//! The cryptographic ABI of the machine, the byte lengths a caller must respect when it lays out a
 
 use qtv_crypto::{ml_dsa, slh_dsa};
 
-/// The scheme identifier of the module lattice signature, ML-DSA, the default scheme.
 pub const SCHEME_ML_DSA: u64 = crate::crypto::SCHEME_ML_DSA;
-/// The scheme identifier of the hash based signature, SLH-DSA.
 pub const SCHEME_SLH_DSA: u64 = crate::crypto::SCHEME_SLH_DSA;
 
-/// The thirty two byte storage key of a scalar field slot, the slot number in the low eight bytes and
 pub fn scalar_key(slot: u64) -> crate::interp::StorageKey {
     let mut key = [0u8; crate::interp::STORAGE_KEY_BYTES];
     key[crate::interp::STORAGE_KEY_BYTES - 8..].copy_from_slice(&slot.to_be_bytes());
     key
 }
 
-/// The public key byte length of an ML-DSA verify region, the prefix the verify and address opcodes
 pub const ML_DSA_PUBLIC_KEY_BYTES: usize = ml_dsa::PUBLIC_KEY_BYTES;
-/// The signature byte length that follows an ML-DSA public key in a verify region.
 pub const ML_DSA_SIGNATURE_BYTES: usize = ml_dsa::SIGNATURE_BYTES;
-/// The public key byte length of an SLH-DSA verify region under scheme two.
 pub const SLH_DSA_PUBLIC_KEY_BYTES: usize = slh_dsa::PUBLIC_KEY_BYTES;
-/// The signature byte length that follows an SLH-DSA public key in a verify region.
 pub const SLH_DSA_SIGNATURE_BYTES: usize = slh_dsa::SIGNATURE_BYTES;
 
 #[cfg(test)]
