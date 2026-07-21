@@ -11,6 +11,17 @@ pub const SCHEME_ML_DSA: u64 = crate::crypto::SCHEME_ML_DSA;
 /// The scheme identifier of the hash based signature, SLH-DSA.
 pub const SCHEME_SLH_DSA: u64 = crate::crypto::SCHEME_SLH_DSA;
 
+/// The thirty two byte storage key of a scalar field slot, the slot number in the low eight bytes and
+/// the rest zero. A scalar field key is a small integer this way, distinct per slot, while a keyed map
+/// derives its slot by hashing, whose digest is never a small integer but for a hash collision. The
+/// chain, the compiler, and the machine all key a scalar slot this one way so a persisted slot reloads
+/// and a native transfer program keys its balances the same way a contract would.
+pub fn scalar_key(slot: u64) -> crate::interp::StorageKey {
+    let mut key = [0u8; crate::interp::STORAGE_KEY_BYTES];
+    key[crate::interp::STORAGE_KEY_BYTES - 8..].copy_from_slice(&slot.to_be_bytes());
+    key
+}
+
 /// The public key byte length of an ML-DSA verify region, the prefix the verify and address opcodes
 /// slice under scheme one.
 pub const ML_DSA_PUBLIC_KEY_BYTES: usize = ml_dsa::PUBLIC_KEY_BYTES;

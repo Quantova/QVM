@@ -6,6 +6,12 @@ use qtv_crypto::sha3::sha3_256;
 /// Length of an entry or event selector in bytes.
 pub const SELECTOR_BYTES: usize = 4;
 
+/// The canonical signature of the genesis constructor entry, the one a container carries to initialize
+/// its state at deploy. Its name uses the reserved `@` prefix that no source entry can spell, so its
+/// selector never collides with a callable entry, and the compiler that emits it and the chain that
+/// runs it derive the same selector from this one string.
+pub const GENESIS_SIGNATURE: &str = "@genesis()";
+
 /// Version tag bound into the canonical bytes so containers of different layouts never collide.
 const FORMAT_TAG: [u8; 4] = *b"QVM1";
 
