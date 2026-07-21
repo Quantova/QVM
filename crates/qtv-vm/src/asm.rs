@@ -220,6 +220,10 @@ fn parse_instr(
             want(3)?;
             triple(no, &ops, Triple::Kem)?
         }
+        "ADDR" => {
+            want(3)?;
+            triple(no, &ops, Triple::Addr)?
+        }
         "NOT" => {
             want(2)?;
             Instr::Not {
@@ -324,6 +328,7 @@ enum Triple {
     MerkleVerify,
     VrfVerify,
     Kem,
+    Addr,
 }
 
 fn triple(no: usize, ops: &[&str], kind: Triple) -> Result<Instr, AsmError> {
@@ -356,6 +361,7 @@ fn triple(no: usize, ops: &[&str], kind: Triple) -> Result<Instr, AsmError> {
         Triple::MerkleVerify => Instr::MerkleVerify { a: d, b: a, c: b },
         Triple::VrfVerify => Instr::VrfVerify { a: d, b: a, c: b },
         Triple::Kem => Instr::Kem { a: d, b: a, c: b },
+        Triple::Addr => Instr::Addr { a: d, b: a, c: b },
     };
     Ok(instr)
 }

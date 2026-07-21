@@ -18,6 +18,10 @@ pub enum Fault {
     BadJump,
     BadConst,
     UnknownSelector,
+    /// The ADDR opcode was handed a signature scheme it does not know, so it cannot slice a public
+    /// key of a defined length. A generated contract only ever runs ADDR under a scheme it already
+    /// dispatched on, so this reverts a malformed or hand rolled program rather than a real call.
+    BadScheme,
     Decode(DecodeError),
 }
 
@@ -339,6 +343,7 @@ impl<'a> Interpreter<'a> {
             Instr::MerkleVerify { a, b, c } => crate::crypto::merkle_verify(m, a, b, c)?,
             Instr::VrfVerify { a, b, c } => crate::crypto::verify_vrf(m, a, b, c)?,
             Instr::Kem { a, b, c } => crate::crypto::kem(m, a, b, c)?,
+            Instr::Addr { a, b, c } => crate::crypto::address(m, a, b, c)?,
         }
         Ok(Step::Next)
     }
@@ -898,6 +903,38 @@ mod tests {
         assert_eq!(out.regs[3], first);
         let expected = 3 * crate::gas::cost(OpCode::Ldi)
             + crate::gas::cost(OpCode::Kem)
+            + crate::gas::cost(OpCode::MLoad)
+            + crate::gas::cost(OpCode::Halt);
+        assert_eq!(out.gas_used, expected);
+    }
+
+    #[test]
+    fn addr_opcode_derives_the_account_address_metered() {
+        use crate::asm::assemble;
+        use qtv_crypto::ml_dsa;
+        use qtv_crypto::sha3::sha3_256;
+
+        // The public key sits at the front of scratch, exactly where a verify region begins. ADDR
+        // reads the scheme from r1, the region pointer from r0, and writes the address at r2.
+        let (pk, _sk) = ml_dsa::keygen(&[5u8; 32]);
+        let out_off = 40000u64;
+        let src = format!(
+            "LDI r0, 0\nLDI r1, {}\nLDI r2, {out_off}\nADDR r0, r1, r2\nMLOAD r3, r2\nHALT",
+            crate::crypto::SCHEME_ML_DSA
+        );
+        let code = assemble(&src).expect("assemble");
+        let out = Interpreter::new(&code, &[], 100_000)
+            .with_memory(&pk)
+            .run()
+            .expect("halt");
+
+        let mut preimage = vec![crate::crypto::SCHEME_ML_DSA as u8];
+        preimage.extend_from_slice(&pk);
+        let want = sha3_256(&preimage);
+        let first = u64::from_be_bytes(want[..8].try_into().unwrap());
+        assert_eq!(out.regs[3], first, "address matches the account model digest");
+        let expected = 3 * crate::gas::cost(OpCode::Ldi)
+            + crate::gas::cost(OpCode::Addr)
             + crate::gas::cost(OpCode::MLoad)
             + crate::gas::cost(OpCode::Halt);
         assert_eq!(out.gas_used, expected);

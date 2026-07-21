@@ -65,6 +65,8 @@ pub fn cost(op: OpCode) -> u64 {
         OpCode::MerkleVerify => 512,
         OpCode::VrfVerify => 66000,
         OpCode::Kem => 640,
+        // One SHA3 over a scheme byte and a public key, in the range of the plain hash it reduces to.
+        OpCode::Addr => 64,
     }
 }
 
@@ -117,6 +119,7 @@ mod tests {
             Instr::MerkleVerify { a: 0, b: 0, c: 0 },
             Instr::VrfVerify { a: 0, b: 0, c: 0 },
             Instr::Kem { a: 0, b: 0, c: 0 },
+            Instr::Addr { a: 0, b: 0, c: 0 },
         ]
         .iter()
         .map(Instr::opcode)
