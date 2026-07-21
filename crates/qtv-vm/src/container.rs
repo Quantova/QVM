@@ -1,29 +1,18 @@
-//! Bytecode container. Holds the code, a constant pool, a state access manifest, and an interface
-//! of selectors. The container identifier is the SHA3 256 of the canonical container bytes.
 
 use qtv_crypto::sha3::sha3_256;
 
-/// Length of an entry or event selector in bytes.
 pub const SELECTOR_BYTES: usize = 4;
 
-/// The canonical signature of the genesis constructor entry, the one a container carries to initialize
-/// its state at deploy. Its name uses the reserved `@` prefix that no source entry can spell, so its
-/// selector never collides with a callable entry, and the compiler that emits it and the chain that
-/// runs it derive the same selector from this one string.
 pub const GENESIS_SIGNATURE: &str = "@genesis()";
 
-/// Version tag bound into the canonical bytes so containers of different layouts never collide.
 const FORMAT_TAG: [u8; 4] = *b"QVM1";
 
-/// The declared reads and writes of one entry.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct StateAccess {
     pub reads: Vec<u64>,
     pub writes: Vec<u64>,
 }
 
-/// One callable entry named by its selector, with the code offset it begins at and its declared
-/// state access. A call names the entry by its selector and the interpreter enters at the offset.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     pub selector: [u8; SELECTOR_BYTES],
@@ -47,8 +36,6 @@ impl Container {
         }
     }
 
-    /// Deterministic serialization of the whole container. Every field is length prefixed so no two
-    /// distinct containers share an encoding.
     pub fn canonical_bytes(&self) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&FORMAT_TAG);
@@ -71,13 +58,10 @@ impl Container {
         out
     }
 
-    /// The container identifier. It is the raw digest surfaced later through the identifier format.
     pub fn identifier(&self) -> [u8; 32] {
         sha3_256(&self.canonical_bytes())
     }
 
-    /// Resolve a call selector to the code offset of its entry. None when no entry matches, which a
-    /// caller turns into a revert.
     pub fn entry_offset(&self, selector: &[u8; SELECTOR_BYTES]) -> Option<u32> {
         self.entries
             .iter()
@@ -86,8 +70,6 @@ impl Container {
     }
 }
 
-/// The selector of an entry or event. It is the leading bytes of the SHA3 hash of the canonical
-/// signature string, which is the name followed by the parenthesized parameter types.
 pub fn selector(signature: &str) -> [u8; SELECTOR_BYTES] {
     let digest = sha3_256(signature.as_bytes());
     let mut sel = [0u8; SELECTOR_BYTES];

@@ -1,5 +1,3 @@
-//! Small assembler from a plain text mnemonic form to bytecode. It is enough to write test
-//! programs. Labels stand in for branch and call targets and resolve to absolute code offsets.
 
 use std::collections::HashMap;
 
@@ -16,8 +14,6 @@ pub enum AsmError {
     ProgramTooLarge(usize),
 }
 
-/// Assemble a program into bytecode. A line ending in a colon defines a label. A line beginning
-/// with a hash is a comment.
 pub fn assemble(src: &str) -> Result<Vec<u8>, AsmError> {
     let lines = logical_lines(src);
 

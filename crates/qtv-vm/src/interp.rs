@@ -1,5 +1,3 @@
-//! Deterministic interpreter. Decodes and executes, meters gas per instruction, faults on
-//! overflow or out of gas and rolls back, and halts cleanly.
 
 use std::collections::BTreeMap;
 
@@ -18,41 +16,23 @@ pub enum Fault {
     BadJump,
     BadConst,
     UnknownSelector,
-    /// The ADDR opcode was handed a signature scheme it does not know, so it cannot slice a public
-    /// key of a defined length. A generated contract only ever runs ADDR under a scheme it already
-    /// dispatched on, so this reverts a malformed or hand rolled program rather than a real call.
     BadScheme,
     Decode(DecodeError),
 }
 
-/// A native effect the machine records for the host to apply after a clean halt. The machine never
-/// touches account balances itself, since a contract sees only its own declared state, so a native
-/// transfer is a recorded effect and the host enforces the balance against the ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
-    /// Move `amount` of the native asset to the account named by `to`, the raw address payload.
     Transfer { to: Vec<u8>, amount: u64 },
-    /// Append a typed event to the block event trie. `selector` is the event's interface selector and
-    /// `data` is the encoded operand payload the host indexes and a light client proves against the
-    /// event root. Like a transfer it is a recorded effect, so a fault records nothing.
     Event {
         selector: [u8; SELECTOR_BYTES],
         data: Vec<u8>,
     },
 }
 
-/// The width of a contract storage key. A storage slot is a full thirty two byte key, not a machine
-/// word, so the space of slots is the space of SHA3 digests and a second preimage against one slot is
-/// a full preimage rather than a sixty four bit search. A scalar field key is `scalar_key` of its slot
-/// number and a keyed map derives its slot by hashing the map and the whole key, so two distinct keys
-/// share a slot only on a hash collision.
 pub const STORAGE_KEY_BYTES: usize = 32;
 
-/// A contract storage key, a thirty two byte value read from scratch memory by the storage opcodes.
 pub type StorageKey = [u8; STORAGE_KEY_BYTES];
 
-/// The result of a clean halt. State changes and recorded effects are surfaced only on success, so a
-/// fault rolls back and records nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Outcome {
     pub regs: [u64; NUM_REGS],
@@ -61,15 +41,12 @@ pub struct Outcome {
     pub effects: Vec<Effect>,
 }
 
-/// Internal control flow after a step.
 enum Step {
     Next,
     Halt,
     JumpTo(u32),
 }
 
-/// Read a thirty two byte storage key from scratch memory at a byte offset. Out of bounds faults, the
-/// same fault a bad memory access takes, so a malformed program reverts rather than reads past memory.
 fn read_key(m: &Machine, offset: u64) -> Result<StorageKey, Fault> {
     let region = m
         .mem_region(offset, STORAGE_KEY_BYTES as u64)
@@ -102,10 +79,6 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    /// Build an interpreter that enters the entry named by `selector`. A call to a selector no entry
-    /// carries reverts with `UnknownSelector`. The dispatch is metered, so its cost is charged as the
-    /// run's initial gas and a limit that cannot cover it faults with `OutOfGas`. The single entry
-    /// path stays available through `new`, which enters at offset zero.
     pub fn for_entry(
         container: &'a Container,
         selector: [u8; SELECTOR_BYTES],
@@ -123,16 +96,11 @@ impl<'a> Interpreter<'a> {
         Ok(interp)
     }
 
-    /// Seed the declared state read set. The interpreter works on this copy and returns it only on
-    /// a clean halt, so a fault leaves the caller's state untouched.
     pub fn with_storage(mut self, storage: BTreeMap<StorageKey, u64>) -> Self {
         self.storage = storage;
         self
     }
 
-    /// Seed the initial scratch memory. The bytes are copied into the front of the machine memory so
-    /// a program can read cryptographic inputs the caller placed there. Bytes past the memory size
-    /// are dropped.
     pub fn with_memory(mut self, data: &[u8]) -> Self {
         let n = data.len().min(self.machine.mem.len());
         self.machine.mem[..n].copy_from_slice(&data[..n]);
@@ -319,8 +287,6 @@ impl<'a> Interpreter<'a> {
                 return Ok(Step::JumpTo(target));
             }
 
-            // Storage keys are thirty two byte values, read from scratch memory at the pointer in the
-            // key register, so the slot space is the full digest space rather than a machine word.
             Instr::SLoad { d, a } => {
                 let key = read_key(m, m.reg(a))?;
                 let v = self.storage.get(&key).copied().unwrap_or(0);
@@ -332,10 +298,6 @@ impl<'a> Interpreter<'a> {
                 self.storage.insert(key, val);
             }
 
-            // Message group. A native transfer is recorded as an outbound effect the host applies, so
-            // the machine never touches a balance. The target account is read from scratch memory at
-            // the offset in a for the length in b, and the amount is in c. The machine records the
-            // effect without checking coverage; the host enforces the balance against the ledger.
             Instr::Send { a, b, c } => {
                 let amount = m.reg(c);
                 let to = m
@@ -345,10 +307,6 @@ impl<'a> Interpreter<'a> {
                 self.effects.push(Effect::Transfer { to, amount });
             }
 
-            // The event group. An emit records a typed event the host appends to the block event trie.
-            // The payload is read from scratch memory at the offset in a for the length in b, and the
-            // event selector is the low four bytes of c. Like a transfer it is a recorded effect, so a
-            // fault records nothing and a clean halt surfaces the events in emission order.
             Instr::Emit { a, b, c } => {
                 let selector = (m.reg(c) as u32).to_be_bytes();
                 let data = m
@@ -358,8 +316,6 @@ impl<'a> Interpreter<'a> {
                 self.effects.push(Effect::Event { selector, data });
             }
 
-            // Cryptographic group. Each reads its inputs from a scratch memory region and calls the
-            // matching post quantum primitive in the crypto crate.
             Instr::Hash { a, b, c } => crate::crypto::hash(m, a, b, c)?,
             Instr::VerifyMl { a, b, c } => crate::crypto::verify_ml(m, a, b, c)?,
             Instr::VerifySlh { a, b, c } => crate::crypto::verify_slh(m, a, b, c)?,
@@ -582,7 +538,6 @@ mod tests {
 
     #[test]
     fn backward_branch_loop() {
-        // Ldi is ten bytes, SubW and AddW are four, Jnz is six. The loop head is at offset 30.
         let code = program(&[
             Instr::Ldi { d: 0, imm: 3 },
             Instr::Ldi { d: 1, imm: 0 },
@@ -599,7 +554,6 @@ mod tests {
 
     #[test]
     fn call_and_return() {
-        // Call is five bytes and Halt is one, so the subroutine begins at offset 6.
         let code = program(&[
             Instr::Call { target: 6 },
             Instr::Halt,
@@ -624,8 +578,6 @@ mod tests {
 
     #[test]
     fn storage_store_then_load() {
-        // The thirty two byte key for slot seven sits at the front of scratch, and the storage opcodes
-        // name it by its pointer in r0.
         let key = crate::abi::scalar_key(7);
         let code = program(&[
             Instr::Ldi { d: 0, imm: 0 },
@@ -644,9 +596,6 @@ mod tests {
 
     #[test]
     fn keys_differing_past_the_leading_word_do_not_share_a_slot() {
-        // Two thirty two byte keys that agree in their first eight bytes but differ later address
-        // distinct slots, which the old sixty four bit slot could not tell apart. Both keys sit in
-        // scratch and each store lands under its own key.
         let mut a = [7u8; 32];
         let mut b = [7u8; 32];
         a[16] = 1;
@@ -700,8 +649,6 @@ mod tests {
     #[test]
     fn send_records_transfer_effect() {
         use crate::asm::assemble;
-        // A thirty two byte target account sits at the front of scratch memory. SEND names it by the
-        // offset in r0 and the length in r1, and moves the amount in r2.
         let account = [171u8; 32];
         let code = assemble("LDI r0, 0\nLDI r1, 32\nLDI r2, 1000\nSEND r0, r1, r2\nHALT")
             .expect("assemble");
@@ -752,8 +699,6 @@ mod tests {
     #[test]
     fn emit_records_event_effect() {
         use crate::asm::assemble;
-        // A sixteen byte payload sits at the front of scratch memory. EMIT names it by the offset in
-        // r0 and the length in r1, and carries the four byte event selector in the low bytes of r2.
         let payload = [7u8; 16];
         let selector: u32 = 2882343476;
         let code = assemble(&format!(
@@ -819,7 +764,6 @@ mod tests {
         use crate::asm::assemble;
         use qtv_crypto::ml_dsa;
 
-        // A key, a signature over a message, and the message form the verify region at offset zero.
         let (pk, sk) = ml_dsa::keygen(&[9u8; 32]);
         let message = b"quantova hand assembled milestone";
         let signature = ml_dsa::sign(&sk, message, &[], &[0u8; 32]).expect("sign");
@@ -834,8 +778,6 @@ mod tests {
         let region_len = region.len();
         let digest_off = 32768;
 
-        // Hash the message region into scratch, read the first digest word back, then verify the
-        // signature over the whole region and halt.
         let src = format!(
             "LDI r0, {msg_off}\n\
              LDI r1, {msg_len}\n\
@@ -865,7 +807,6 @@ mod tests {
         assert_eq!(out.gas_used, expected);
     }
 
-    // Run a one instruction verify over a seeded region and return the boolean result and gas used.
     fn run_verify(mnemonic: &str, region: &[u8]) -> (u64, u64) {
         use crate::asm::assemble;
         let src = format!(
@@ -975,8 +916,6 @@ mod tests {
         use qtv_crypto::ml_dsa;
         use qtv_crypto::sha3::sha3_256;
 
-        // The public key sits at the front of scratch, exactly where a verify region begins. ADDR
-        // reads the scheme from r1, the region pointer from r0, and writes the address at r2.
         let (pk, _sk) = ml_dsa::keygen(&[5u8; 32]);
         let out_off = 40000u64;
         let src = format!(
@@ -1003,7 +942,6 @@ mod tests {
 
     #[test]
     fn out_of_gas_rolls_back_storage() {
-        // The self loop at offset 23 burns gas after the write, so the fault discards the write.
         let key = crate::abi::scalar_key(5);
         let mut persistent = BTreeMap::new();
         persistent.insert(key, 1);
@@ -1027,8 +965,6 @@ mod tests {
         [u8; SELECTOR_BYTES],
     ) {
         use crate::container::{selector, Container, Entry, StateAccess};
-        // The first entry sets r0 to 111 and halts, the second sets r0 to 222 and halts. The second
-        // begins right after the first in the shared code blob.
         let first = program(&[Instr::Ldi { d: 0, imm: 111 }, Instr::Halt]);
         let second = program(&[Instr::Ldi { d: 0, imm: 222 }, Instr::Halt]);
         let offset = first.len() as u32;
@@ -1068,7 +1004,6 @@ mod tests {
             .run()
             .expect("halt");
         assert_eq!(b.regs[0], 222);
-        // The dispatch is metered on top of the entry body.
         assert_eq!(
             b.gas_used,
             crate::gas::DISPATCH + crate::gas::cost(OpCode::Ldi) + crate::gas::cost(OpCode::Halt)
@@ -1092,7 +1027,6 @@ mod tests {
 
     #[test]
     fn single_entry_path_enters_at_offset_zero() {
-        // The existing constructor still enters at offset zero with no selector.
         let code = program(&[Instr::Ldi { d: 0, imm: 7 }, Instr::Halt]);
         let out = Interpreter::new(&code, &[], 100).run().expect("halt");
         assert_eq!(out.regs[0], 7);

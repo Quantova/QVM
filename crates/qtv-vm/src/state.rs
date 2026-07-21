@@ -1,15 +1,10 @@
-//! Register machine state. Registers hold 64 bit words. Scratch memory is zeroed at entry.
 
 use crate::isa::{Reg, NUM_REGS};
 
-/// Maximum depth of the operand and call stack.
 pub const STACK_LIMIT: usize = 1024;
 
-/// Size of the linear scratch memory in bytes. It is sized to hold a post-quantum key, signature,
-/// or proof in full, since the cryptographic opcodes read those artifacts from a single region.
 pub const MEM_BYTES: usize = 65536;
 
-/// Width of a machine word in bytes.
 pub const WORD_BYTES: usize = 8;
 
 #[derive(Debug, Clone)]
@@ -44,7 +39,6 @@ impl Machine {
         self.regs[r as usize] = v;
     }
 
-    /// Push a word. Returns false when the stack is at its limit.
     pub fn push(&mut self, v: u64) -> bool {
         if self.stack.len() >= STACK_LIMIT {
             return false;
@@ -57,7 +51,6 @@ impl Machine {
         self.stack.pop()
     }
 
-    /// Read one word from scratch memory at a byte offset. None when the access is out of bounds.
     pub fn mem_load(&self, offset: u64) -> Option<u64> {
         let start = usize::try_from(offset).ok()?;
         let end = start.checked_add(WORD_BYTES)?;
@@ -67,7 +60,6 @@ impl Machine {
         Some(u64::from_be_bytes(buf))
     }
 
-    /// Borrow a byte region of scratch memory. None when the region is out of bounds.
     pub fn mem_region(&self, offset: u64, len: u64) -> Option<&[u8]> {
         let start = usize::try_from(offset).ok()?;
         let len = usize::try_from(len).ok()?;
@@ -75,7 +67,6 @@ impl Machine {
         self.mem.get(start..end)
     }
 
-    /// Copy bytes into scratch memory at a byte offset. False when the region is out of bounds.
     pub fn mem_write(&mut self, offset: u64, bytes: &[u8]) -> bool {
         let start = match usize::try_from(offset) {
             Ok(s) => s,
@@ -94,7 +85,6 @@ impl Machine {
         }
     }
 
-    /// Write one word to scratch memory at a byte offset. False when the access is out of bounds.
     pub fn mem_store(&mut self, offset: u64, v: u64) -> bool {
         let start = match usize::try_from(offset) {
             Ok(s) => s,
