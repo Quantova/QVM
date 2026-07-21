@@ -5,6 +5,9 @@ use qtv_crypto::sha3::sha3_256;
 /// Length of an entry or event selector in bytes.
 pub const SELECTOR_BYTES: usize = 4;
 
+/// The canonical signature of the genesis constructor entry, the one a container carries to initialize
+pub const GENESIS_SIGNATURE: &str = "@genesis()";
+
 /// Version tag bound into the canonical bytes so containers of different layouts never collide.
 const FORMAT_TAG: [u8; 4] = *b"QVM1";
 

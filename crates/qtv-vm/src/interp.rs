@@ -34,12 +34,18 @@ pub enum Effect {
     },
 }
 
+/// The width of a contract storage key. A storage slot is a full thirty two byte key, not a machine
+pub const STORAGE_KEY_BYTES: usize = 32;
+
+/// A contract storage key, a thirty two byte value read from scratch memory by the storage opcodes.
+pub type StorageKey = [u8; STORAGE_KEY_BYTES];
+
 /// The result of a clean halt. State changes and recorded effects are surfaced only on success, so a
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Outcome {
     pub regs: [u64; NUM_REGS],
     pub gas_used: u64,
-    pub storage: BTreeMap<u64, u64>,
+    pub storage: BTreeMap<StorageKey, u64>,
     pub effects: Vec<Effect>,
 }
 
@@ -50,13 +56,23 @@ enum Step {
     JumpTo(u32),
 }
 
+/// Read a thirty two byte storage key from scratch memory at a byte offset. Out of bounds faults, the
+fn read_key(m: &Machine, offset: u64) -> Result<StorageKey, Fault> {
+    let region = m
+        .mem_region(offset, STORAGE_KEY_BYTES as u64)
+        .ok_or(Fault::BadMemory)?;
+    let mut key = [0u8; STORAGE_KEY_BYTES];
+    key.copy_from_slice(region);
+    Ok(key)
+}
+
 pub struct Interpreter<'a> {
     code: &'a [u8],
     consts: &'a [u64],
     machine: Machine,
     gas_limit: u64,
     gas_used: u64,
-    storage: BTreeMap<u64, u64>,
+    storage: BTreeMap<StorageKey, u64>,
     effects: Vec<Effect>,
 }
 
@@ -92,7 +108,7 @@ impl<'a> Interpreter<'a> {
     }
 
     /// Seed the declared state read set. The interpreter works on this copy and returns it only on
-    pub fn with_storage(mut self, storage: BTreeMap<u64, u64>) -> Self {
+    pub fn with_storage(mut self, storage: BTreeMap<StorageKey, u64>) -> Self {
         self.storage = storage;
         self
     }
@@ -284,13 +300,15 @@ impl<'a> Interpreter<'a> {
                 return Ok(Step::JumpTo(target));
             }
 
+            // Storage keys are thirty two byte values, read from scratch memory at the pointer in the
+            // key register, so the slot space is the full digest space rather than a machine word.
             Instr::SLoad { d, a } => {
-                let key = m.reg(a);
+                let key = read_key(m, m.reg(a))?;
                 let v = self.storage.get(&key).copied().unwrap_or(0);
                 m.set_reg(d, v);
             }
             Instr::SStore { a, b } => {
-                let key = m.reg(a);
+                let key = read_key(m, m.reg(a))?;
                 let val = m.reg(b);
                 self.storage.insert(key, val);
             }
@@ -587,24 +605,61 @@ mod tests {
 
     #[test]
     fn storage_store_then_load() {
+        // The thirty two byte key for slot seven sits at the front of scratch, and the storage opcodes
+        // name it by its pointer in r0.
+        let key = crate::abi::scalar_key(7);
         let code = program(&[
-            Instr::Ldi { d: 0, imm: 7 },
+            Instr::Ldi { d: 0, imm: 0 },
             Instr::Ldi { d: 1, imm: 99 },
             Instr::SStore { a: 0, b: 1 },
             Instr::SLoad { d: 2, a: 0 },
             Instr::Halt,
         ]);
-        let out = Interpreter::new(&code, &[], 2000).run().expect("halt");
+        let out = Interpreter::new(&code, &[], 2000)
+            .with_memory(&key)
+            .run()
+            .expect("halt");
         assert_eq!(out.regs[2], 99);
-        assert_eq!(out.storage.get(&7), Some(&99));
+        assert_eq!(out.storage.get(&key), Some(&99));
+    }
+
+    #[test]
+    fn keys_differing_past_the_leading_word_do_not_share_a_slot() {
+        // Two thirty two byte keys that agree in their first eight bytes but differ later address
+        // distinct slots, which the old sixty four bit slot could not tell apart. Both keys sit in
+        // scratch and each store lands under its own key.
+        let mut a = [7u8; 32];
+        let mut b = [7u8; 32];
+        a[16] = 1;
+        b[16] = 2;
+        let mut mem = Vec::new();
+        mem.extend_from_slice(&a);
+        mem.extend_from_slice(&b);
+        let code = program(&[
+            Instr::Ldi { d: 0, imm: 0 },
+            Instr::Ldi { d: 1, imm: 100 },
+            Instr::SStore { a: 0, b: 1 },
+            Instr::Ldi { d: 2, imm: 32 },
+            Instr::Ldi { d: 3, imm: 200 },
+            Instr::SStore { a: 2, b: 3 },
+            Instr::Halt,
+        ]);
+        let out = Interpreter::new(&code, &[], 4000)
+            .with_memory(&mem)
+            .run()
+            .expect("halt");
+        assert_eq!(out.storage.get(&a), Some(&100));
+        assert_eq!(out.storage.get(&b), Some(&200));
+        assert_eq!(out.storage.len(), 2, "the two keys are distinct slots");
     }
 
     #[test]
     fn fault_rolls_back_storage() {
+        let key = crate::abi::scalar_key(5);
         let mut persistent = BTreeMap::new();
-        persistent.insert(5, 1);
+        persistent.insert(key, 1);
         let code = program(&[
-            Instr::Ldi { d: 0, imm: 5 },
+            Instr::Ldi { d: 0, imm: 0 },
             Instr::Ldi { d: 1, imm: 123 },
             Instr::SStore { a: 0, b: 1 },
             Instr::Ldi {
@@ -617,9 +672,10 @@ mod tests {
         ]);
         let res = Interpreter::new(&code, &[], 2000)
             .with_storage(persistent.clone())
+            .with_memory(&key)
             .run();
         assert_eq!(res, Err(Fault::Overflow));
-        assert_eq!(persistent.get(&5), Some(&1));
+        assert_eq!(persistent.get(&key), Some(&1));
     }
 
     #[test]
@@ -929,19 +985,21 @@ mod tests {
     #[test]
     fn out_of_gas_rolls_back_storage() {
         // The self loop at offset 23 burns gas after the write, so the fault discards the write.
+        let key = crate::abi::scalar_key(5);
         let mut persistent = BTreeMap::new();
-        persistent.insert(5, 1);
+        persistent.insert(key, 1);
         let code = program(&[
-            Instr::Ldi { d: 0, imm: 5 },
+            Instr::Ldi { d: 0, imm: 0 },
             Instr::Ldi { d: 1, imm: 123 },
             Instr::SStore { a: 0, b: 1 },
             Instr::Jmp { target: 23 },
         ]);
         let res = Interpreter::new(&code, &[], 520)
             .with_storage(persistent.clone())
+            .with_memory(&key)
             .run();
         assert_eq!(res, Err(Fault::OutOfGas));
-        assert_eq!(persistent.get(&5), Some(&1));
+        assert_eq!(persistent.get(&key), Some(&1));
     }
 
     fn two_entry_container() -> (
