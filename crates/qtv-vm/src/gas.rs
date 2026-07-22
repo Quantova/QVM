@@ -3,6 +3,10 @@ use crate::isa::OpCode;
 
 pub const DISPATCH: u64 = 4;
 
+pub const EFFECT_BYTE: u64 = 2;
+
+pub const EFFECTS_BYTES_CAP: u64 = 1 << 20;
+
 pub fn cost(op: OpCode) -> u64 {
     match op {
         OpCode::Halt => 0,
