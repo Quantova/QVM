@@ -1,5 +1,6 @@
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use crate::container::{Container, SELECTOR_BYTES};
 use crate::isa::{decode, DecodeError, Instr, NUM_REGS};
@@ -18,6 +19,8 @@ pub enum Fault {
     UnknownSelector,
     BadScheme,
     EffectsTooLarge,
+    UndeclaredSlot,
+    CryptoFault,
     Decode(DecodeError),
 }
 
@@ -57,6 +60,41 @@ fn read_key(m: &Machine, offset: u64) -> Result<StorageKey, Fault> {
     Ok(key)
 }
 
+fn boundaries(code: &[u8]) -> BTreeSet<u32> {
+    let mut set = BTreeSet::new();
+    let mut pc = 0usize;
+    while pc < code.len() {
+        let off = match u32::try_from(pc) {
+            Ok(o) => o,
+            Err(_) => break,
+        };
+        match decode(code, pc) {
+            Ok((_, len)) if len > 0 => {
+                set.insert(off);
+                pc += len;
+            }
+            _ => break,
+        }
+    }
+    set
+}
+
+struct Manifest {
+    reads: BTreeSet<StorageKey>,
+    writes: BTreeSet<StorageKey>,
+    boundaries: BTreeSet<u32>,
+}
+
+impl Manifest {
+    fn can_read(&self, key: &StorageKey) -> bool {
+        self.reads.contains(key) || self.writes.contains(key)
+    }
+
+    fn can_write(&self, key: &StorageKey) -> bool {
+        self.writes.contains(key)
+    }
+}
+
 pub struct Interpreter<'a> {
     code: &'a [u8],
     consts: &'a [u64],
@@ -66,6 +104,7 @@ pub struct Interpreter<'a> {
     storage: BTreeMap<StorageKey, u64>,
     effects: Vec<Effect>,
     effects_bytes: u64,
+    manifest: Option<Manifest>,
 }
 
 impl<'a> Interpreter<'a> {
@@ -79,6 +118,7 @@ impl<'a> Interpreter<'a> {
             storage: BTreeMap::new(),
             effects: Vec::new(),
             effects_bytes: 0,
+            manifest: None,
         }
     }
 
@@ -87,15 +127,34 @@ impl<'a> Interpreter<'a> {
         selector: [u8; SELECTOR_BYTES],
         gas_limit: u64,
     ) -> Result<Self, Fault> {
-        let offset = container
-            .entry_offset(&selector)
+        let entry = container
+            .entries
+            .iter()
+            .find(|e| e.selector == selector)
             .ok_or(Fault::UnknownSelector)?;
         if crate::gas::DISPATCH > gas_limit {
             return Err(Fault::OutOfGas);
         }
+        let reads = entry
+            .access
+            .reads
+            .iter()
+            .map(|&slot| crate::abi::scalar_key(slot))
+            .collect();
+        let writes = entry
+            .access
+            .writes
+            .iter()
+            .map(|&slot| crate::abi::scalar_key(slot))
+            .collect();
         let mut interp = Interpreter::new(&container.code, &container.consts, gas_limit);
-        interp.machine.pc = offset;
+        interp.machine.pc = entry.offset;
         interp.gas_used = crate::gas::DISPATCH;
+        interp.manifest = Some(Manifest {
+            reads,
+            writes,
+            boundaries: boundaries(&container.code),
+        });
         Ok(interp)
     }
 
@@ -140,16 +199,21 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    fn charge(&mut self, amount: u64) -> Result<(), Fault> {
+        let spent = self.gas_used.checked_add(amount).ok_or(Fault::OutOfGas)?;
+        if spent > self.gas_limit {
+            return Err(Fault::OutOfGas);
+        }
+        self.gas_used = spent;
+        Ok(())
+    }
+
     fn charge_effect(&mut self, bytes: usize) -> Result<(), Fault> {
         let n = bytes as u64;
         let byte_cost = n
             .checked_mul(crate::gas::EFFECT_BYTE)
             .ok_or(Fault::OutOfGas)?;
-        let spent = self.gas_used.checked_add(byte_cost).ok_or(Fault::OutOfGas)?;
-        if spent > self.gas_limit {
-            return Err(Fault::OutOfGas);
-        }
-        self.gas_used = spent;
+        self.charge(byte_cost)?;
 
         let retained = self
             .effects_bytes
@@ -162,16 +226,26 @@ impl<'a> Interpreter<'a> {
         Ok(())
     }
 
+    fn run_crypto<F>(&mut self, f: F) -> Result<(), Fault>
+    where
+        F: FnOnce(&mut Machine) -> Result<(), Fault>,
+    {
+        let machine = &mut self.machine;
+        match catch_unwind(AssertUnwindSafe(|| f(machine))) {
+            Ok(result) => result,
+            Err(_) => Err(Fault::CryptoFault),
+        }
+    }
+
+    fn target_ok(&self, target: u32) -> bool {
+        match &self.manifest {
+            Some(man) => man.boundaries.contains(&target),
+            None => (target as usize) < self.code.len(),
+        }
+    }
+
     fn step(&mut self, instr: Instr) -> Result<Step, Fault> {
-        let code_len = self.code.len();
         let consts = self.consts;
-        let check = |target: u32| -> Result<(), Fault> {
-            if target as usize >= code_len {
-                Err(Fault::BadJump)
-            } else {
-                Ok(())
-            }
-        };
         let m = &mut self.machine;
         match instr {
             Instr::Halt => return Ok(Step::Halt),
@@ -282,44 +356,64 @@ impl<'a> Interpreter<'a> {
             }
 
             Instr::Jmp { target } => {
-                check(target)?;
+                if !self.target_ok(target) {
+                    return Err(Fault::BadJump);
+                }
                 return Ok(Step::JumpTo(target));
             }
             Instr::Jz { a, target } => {
                 if m.reg(a) == 0 {
-                    check(target)?;
+                    if !self.target_ok(target) {
+                        return Err(Fault::BadJump);
+                    }
                     return Ok(Step::JumpTo(target));
                 }
             }
             Instr::Jnz { a, target } => {
                 if m.reg(a) != 0 {
-                    check(target)?;
+                    if !self.target_ok(target) {
+                        return Err(Fault::BadJump);
+                    }
                     return Ok(Step::JumpTo(target));
                 }
             }
             Instr::Call { target } => {
-                check(target)?;
                 let ret = u64::from(m.pc);
                 if !m.push(ret) {
                     return Err(Fault::StackOverflow);
+                }
+                if !self.target_ok(target) {
+                    return Err(Fault::BadJump);
                 }
                 return Ok(Step::JumpTo(target));
             }
             Instr::Ret => {
                 let ret = m.pop().ok_or(Fault::StackUnderflow)?;
                 let target = u32::try_from(ret).map_err(|_| Fault::BadJump)?;
-                check(target)?;
+                if !self.target_ok(target) {
+                    return Err(Fault::BadJump);
+                }
                 return Ok(Step::JumpTo(target));
             }
 
             Instr::SLoad { d, a } => {
                 let key = read_key(m, m.reg(a))?;
+                if let Some(man) = &self.manifest {
+                    if !man.can_read(&key) {
+                        return Err(Fault::UndeclaredSlot);
+                    }
+                }
                 let v = self.storage.get(&key).copied().unwrap_or(0);
                 m.set_reg(d, v);
             }
             Instr::SStore { a, b } => {
                 let key = read_key(m, m.reg(a))?;
                 let val = m.reg(b);
+                if let Some(man) = &self.manifest {
+                    if !man.can_write(&key) {
+                        return Err(Fault::UndeclaredSlot);
+                    }
+                }
                 self.storage.insert(key, val);
             }
 
@@ -343,13 +437,32 @@ impl<'a> Interpreter<'a> {
                 self.effects.push(Effect::Event { selector, data });
             }
 
-            Instr::Hash { a, b, c } => crate::crypto::hash(m, a, b, c)?,
-            Instr::VerifyMl { a, b, c } => crate::crypto::verify_ml(m, a, b, c)?,
-            Instr::VerifySlh { a, b, c } => crate::crypto::verify_slh(m, a, b, c)?,
-            Instr::MerkleVerify { a, b, c } => crate::crypto::merkle_verify(m, a, b, c)?,
-            Instr::VrfVerify { a, b, c } => crate::crypto::verify_vrf(m, a, b, c)?,
-            Instr::Kem { a, b, c } => crate::crypto::kem(m, a, b, c)?,
-            Instr::Addr { a, b, c } => crate::crypto::address(m, a, b, c)?,
+            Instr::Hash { a, b, c } => {
+                let len = m.reg(b);
+                self.charge(crate::gas::hash_variable(len))?;
+                self.run_crypto(|machine| crate::crypto::hash(machine, a, b, c))?;
+            }
+            Instr::VerifyMl { a, b, c } => {
+                let tail = m.reg(b).saturating_sub(crate::crypto::ML_DSA_SIGNED_BYTES);
+                self.charge(crate::gas::message_variable(tail))?;
+                self.run_crypto(|machine| crate::crypto::verify_ml(machine, a, b, c))?;
+            }
+            Instr::VerifySlh { a, b, c } => {
+                let tail = m.reg(b).saturating_sub(crate::crypto::SLH_DSA_SIGNED_BYTES);
+                self.charge(crate::gas::message_variable(tail))?;
+                self.run_crypto(|machine| crate::crypto::verify_slh(machine, a, b, c))?;
+            }
+            Instr::MerkleVerify { a, b, c } => {
+                let path = m.reg(b).saturating_sub(crate::crypto::MERKLE_HEADER);
+                self.charge(crate::gas::merkle_variable(path))?;
+                self.run_crypto(|machine| crate::crypto::merkle_verify(machine, a, b, c))?;
+            }
+            Instr::Kem { a, b, c } => {
+                self.run_crypto(|machine| crate::crypto::kem(machine, a, b, c))?;
+            }
+            Instr::Addr { a, b, c } => {
+                self.run_crypto(|machine| crate::crypto::address(machine, a, b, c))?;
+            }
         }
         Ok(Step::Next)
     }
@@ -854,7 +967,7 @@ mod tests {
         assert_eq!(out.regs[5], first);
         assert_eq!(
             out.gas_used,
-            1 + 1 + 3 + 1 + 1 + crate::gas::cost(OpCode::Hash) + 3
+            1 + 1 + 3 + 1 + 1 + crate::gas::cost(OpCode::Hash) + crate::gas::hash_variable(8) + 3
         );
     }
 
@@ -900,8 +1013,10 @@ mod tests {
         assert_eq!(out.regs[6], first, "hash must match the crypto crate");
         let expected = 5 * crate::gas::cost(OpCode::Ldi)
             + crate::gas::cost(OpCode::Hash)
+            + crate::gas::hash_variable(msg_len as u64)
             + crate::gas::cost(OpCode::MLoad)
             + crate::gas::cost(OpCode::VerifyMl)
+            + crate::gas::message_variable(msg_len as u64)
             + crate::gas::cost(OpCode::Halt);
         assert_eq!(out.gas_used, expected);
     }
@@ -921,8 +1036,26 @@ mod tests {
         (out.regs[2], out.gas_used)
     }
 
-    fn verify_gas(op: OpCode) -> u64 {
-        2 * crate::gas::cost(OpCode::Ldi) + crate::gas::cost(op) + crate::gas::cost(OpCode::Halt)
+    fn verify_gas(op: OpCode, variable: u64) -> u64 {
+        2 * crate::gas::cost(OpCode::Ldi)
+            + crate::gas::cost(op)
+            + variable
+            + crate::gas::cost(OpCode::Halt)
+    }
+
+    fn merkle_leaf(data: &[u8; 32]) -> [u8; 32] {
+        let mut buf = [0u8; 33];
+        buf[0] = 0x00;
+        buf[1..].copy_from_slice(data);
+        qtv_crypto::sha3::sha3_256(&buf)
+    }
+
+    fn merkle_node(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+        let mut buf = [0u8; 65];
+        buf[0] = 0x01;
+        buf[1..33].copy_from_slice(left);
+        buf[33..].copy_from_slice(right);
+        qtv_crypto::sha3::sha3_256(&buf)
     }
 
     #[test]
@@ -937,48 +1070,189 @@ mod tests {
         region.extend_from_slice(message);
         let (result, gas) = run_verify("VERIFYSLH", &region);
         assert_eq!(result, 1);
-        assert_eq!(gas, verify_gas(OpCode::VerifySlh));
-    }
-
-    #[test]
-    fn vrf_verify_opcode_runs_metered() {
-        use qtv_crypto::vrf;
-        let (sk, pk) = vrf::keygen(b"quantova vrf metered seed");
-        let input = b"metered input";
-        let (output, proof) = vrf::prove(&sk, input);
-        let mut region = Vec::new();
-        region.extend_from_slice(&pk);
-        region.extend_from_slice(&output);
-        region.extend_from_slice(&proof);
-        region.extend_from_slice(input);
-        let (result, gas) = run_verify("VRFVERIFY", &region);
-        assert_eq!(result, 1);
-        assert_eq!(gas, verify_gas(OpCode::VrfVerify));
+        assert_eq!(
+            gas,
+            verify_gas(
+                OpCode::VerifySlh,
+                crate::gas::message_variable(message.len() as u64)
+            )
+        );
     }
 
     #[test]
     fn merkle_verify_opcode_runs_metered() {
         use qtv_crypto::sha3::sha3_256;
-        fn node(left: &[u8], right: &[u8]) -> [u8; 32] {
-            let mut pair = [0u8; 64];
-            pair[..32].copy_from_slice(left);
-            pair[32..].copy_from_slice(right);
-            sha3_256(&pair)
-        }
-        let leaves: Vec<[u8; 32]> = (0..4u8).map(|i| sha3_256(&[i])).collect();
-        let p01 = node(&leaves[0], &leaves[1]);
-        let p23 = node(&leaves[2], &leaves[3]);
-        let root = node(&p01, &p23);
+        let data: Vec<[u8; 32]> = (0..4u8).map(|i| sha3_256(&[i])).collect();
+        let tagged: Vec<[u8; 32]> = data.iter().map(merkle_leaf).collect();
+        let p01 = merkle_node(&tagged[0], &tagged[1]);
+        let p23 = merkle_node(&tagged[2], &tagged[3]);
+        let root = merkle_node(&p01, &p23);
         let index: u64 = 2;
         let mut region = Vec::new();
         region.extend_from_slice(&root);
         region.extend_from_slice(&index.to_be_bytes());
-        region.extend_from_slice(&leaves[2]);
-        region.extend_from_slice(&leaves[3]);
+        region.extend_from_slice(&data[2]);
+        region.extend_from_slice(&tagged[3]);
         region.extend_from_slice(&p01);
+        let path_bytes = (region.len() as u64) - crate::crypto::MERKLE_HEADER;
         let (result, gas) = run_verify("MERKLEVERIFY", &region);
         assert_eq!(result, 1);
-        assert_eq!(gas, verify_gas(OpCode::MerkleVerify));
+        assert_eq!(
+            gas,
+            verify_gas(OpCode::MerkleVerify, crate::gas::merkle_variable(path_bytes))
+        );
+    }
+
+    #[test]
+    fn a_hash_scales_with_the_length_it_absorbs() {
+        use crate::asm::assemble;
+        let short = assemble("LDI r0, 0\nLDI r1, 8\nLDI r2, 40000\nHASH r0, r1, r2\nHALT")
+            .expect("assemble");
+        let long = assemble("LDI r0, 0\nLDI r1, 40000\nLDI r2, 40000\nHASH r0, r1, r2\nHALT")
+            .expect("assemble");
+        let short_gas = Interpreter::new(&short, &[], 1_000_000)
+            .run()
+            .expect("halt")
+            .gas_used;
+        let long_gas = Interpreter::new(&long, &[], 1_000_000)
+            .run()
+            .expect("halt")
+            .gas_used;
+        assert_eq!(
+            long_gas - short_gas,
+            crate::gas::hash_variable(40000) - crate::gas::hash_variable(8)
+        );
+        assert!(long_gas > short_gas);
+    }
+
+    #[test]
+    fn a_hash_loop_over_full_memory_runs_out_of_gas() {
+        use crate::asm::assemble;
+        let code = assemble(
+            "LDI r0, 0\nLDI r1, 65536\nLDI r2, 0\nloop:\nHASH r0, r1, r2\nJMP loop\nHALT",
+        )
+        .expect("assemble");
+        let res = Interpreter::new(&code, &[], 500_000).run();
+        assert_eq!(res, Err(Fault::OutOfGas));
+    }
+
+    #[test]
+    fn a_panicking_crypto_call_is_caught_and_mapped_to_a_fault() {
+        let code = program(&[Instr::Halt]);
+        let mut interp = Interpreter::new(&code, &[], 100);
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let result = interp.run_crypto(|_| panic!("adversarial input reached a primitive"));
+        std::panic::set_hook(hook);
+        assert_eq!(result, Err(Fault::CryptoFault));
+    }
+
+    #[test]
+    fn a_dispatched_entry_may_only_write_declared_slots() {
+        use crate::asm::assemble;
+        use crate::container::{selector, Container, Entry, StateAccess};
+        let code = assemble("LDI r0, 0\nLDI r1, 55\nSSTORE r0, r1\nHALT").expect("assemble");
+        let sel = selector("store()");
+        let container = Container::new(
+            code,
+            vec![],
+            vec![Entry {
+                selector: sel,
+                offset: 0,
+                access: StateAccess {
+                    reads: vec![],
+                    writes: vec![7],
+                },
+            }],
+        );
+        let key7 = crate::abi::scalar_key(7);
+        let out = Interpreter::for_entry(&container, sel, 5000)
+            .expect("entry")
+            .with_memory(&key7)
+            .run()
+            .expect("halt");
+        assert_eq!(out.storage.get(&key7), Some(&55));
+
+        let key8 = crate::abi::scalar_key(8);
+        let res = Interpreter::for_entry(&container, sel, 5000)
+            .expect("entry")
+            .with_memory(&key8)
+            .run();
+        assert_eq!(res, Err(Fault::UndeclaredSlot));
+    }
+
+    #[test]
+    fn a_dispatched_entry_may_only_read_declared_slots() {
+        use crate::asm::assemble;
+        use crate::container::{selector, Container, Entry, StateAccess};
+        let code = assemble("LDI r0, 0\nSLOAD r2, r0\nHALT").expect("assemble");
+        let sel = selector("look()");
+        let container = Container::new(
+            code,
+            vec![],
+            vec![Entry {
+                selector: sel,
+                offset: 0,
+                access: StateAccess {
+                    reads: vec![7],
+                    writes: vec![],
+                },
+            }],
+        );
+        let key7 = crate::abi::scalar_key(7);
+        Interpreter::for_entry(&container, sel, 5000)
+            .expect("entry")
+            .with_memory(&key7)
+            .run()
+            .expect("halt");
+
+        let key8 = crate::abi::scalar_key(8);
+        let res = Interpreter::for_entry(&container, sel, 5000)
+            .expect("entry")
+            .with_memory(&key8)
+            .run();
+        assert_eq!(res, Err(Fault::UndeclaredSlot));
+    }
+
+    #[test]
+    fn a_computed_jump_off_a_boundary_faults_under_dispatch() {
+        use crate::asm::assemble;
+        use crate::container::{selector, Container, Entry, StateAccess};
+        let code = assemble("LDI r0, 3\nPUSH r0\nRET").expect("assemble");
+        let sel = selector("jump()");
+        let container = Container::new(
+            code,
+            vec![],
+            vec![Entry {
+                selector: sel,
+                offset: 0,
+                access: StateAccess::default(),
+            }],
+        );
+        let res = Interpreter::for_entry(&container, sel, 5000).expect("entry").run();
+        assert_eq!(res, Err(Fault::BadJump));
+    }
+
+    #[test]
+    fn a_call_and_return_between_boundaries_still_runs_under_dispatch() {
+        use crate::asm::assemble;
+        use crate::container::{selector, Container, Entry, StateAccess};
+        let code = assemble("CALL fn\nHALT\nfn:\nLDI r0, 9\nRET").expect("assemble");
+        let sel = selector("go()");
+        let container = Container::new(
+            code,
+            vec![],
+            vec![Entry {
+                selector: sel,
+                offset: 0,
+                access: StateAccess::default(),
+            }],
+        );
+        let out = Interpreter::for_entry(&container, sel, 5000)
+            .expect("entry")
+            .run()
+            .expect("halt");
+        assert_eq!(out.regs[0], 9);
     }
 
     #[test]
