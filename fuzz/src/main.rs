@@ -14,7 +14,9 @@ fn main() {
         .unwrap_or(1_000_000);
 
     qtv_vm_fuzz::run_batch(seed, count);
-    println!("fuzz batch of {count} cases passed for seed {seed}");
+    let crypto = (count / 500).max(1);
+    qtv_vm_fuzz::run_crypto_batch(seed, crypto);
+    println!("fuzz batch of {count} cases and {crypto} crypto cases passed for seed {seed}");
 }
 
 fn default_seed() -> u64 {
