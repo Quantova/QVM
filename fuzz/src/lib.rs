@@ -173,6 +173,55 @@ pub fn run_batch(seed: u64, count: usize) {
     }
 }
 
+/// Build one crypto case. Memory is filled with unconstrained bytes and the program invokes a single
+/// crypto opcode over a random region, so an attacker chosen key, signature, path, and message all
+/// reach the primitive.
+fn rand_crypto_case(rng: &mut Rng) -> (Vec<u8>, Vec<u8>) {
+    let mem: Vec<u8> = (0..qtv_vm::state::MEM_BYTES)
+        .map(|_| rng.next_u64() as u8)
+        .collect();
+    let len = rng.below((qtv_vm::state::MEM_BYTES + 1) as u64);
+    let out = rng.below((qtv_vm::state::MEM_BYTES + 1) as u64);
+    let crypto = match rng.below(5) {
+        0 => Instr::Hash { a: 0, b: 1, c: 2 },
+        1 => Instr::VerifyMl { a: 0, b: 1, c: 2 },
+        2 => Instr::VerifySlh { a: 0, b: 1, c: 2 },
+        3 => Instr::MerkleVerify { a: 0, b: 1, c: 2 },
+        _ => Instr::Kem { a: 0, b: 1, c: 2 },
+    };
+    let mut code = Vec::new();
+    Instr::Ldi { d: 0, imm: 0 }.encode(&mut code);
+    Instr::Ldi { d: 1, imm: len }.encode(&mut code);
+    Instr::Ldi { d: 2, imm: out }.encode(&mut code);
+    crypto.encode(&mut code);
+    Instr::Halt.encode(&mut code);
+    (code, mem)
+}
+
+fn exercise_crypto(code: &[u8], mem: &[u8]) {
+    let _ = Interpreter::new(code, &[], GAS_BOUND).with_memory(mem).run();
+}
+
+/// Run a batch of adversarial crypto cases. The interpreter firewall must map any primitive panic to
+/// a fault, so no case may unwind out of the interpreter.
+pub fn run_crypto_batch(seed: u64, count: usize) {
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let mut rng = Rng::new(seed ^ 2870177450012600261);
+    let mut escaped = Vec::new();
+    for i in 0..count {
+        let (code, mem) = rand_crypto_case(&mut rng);
+        if catch_unwind(|| exercise_crypto(&code, &mem)).is_err() {
+            escaped.push(i);
+        }
+    }
+    std::panic::set_hook(hook);
+    assert!(
+        escaped.is_empty(),
+        "interpreter unwound on crypto cases {escaped:?} for seed {seed}"
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,5 +236,10 @@ mod tests {
         run_batch(1, 500);
         run_batch(2, 500);
         run_batch(u64::MAX, 500);
+    }
+
+    #[test]
+    fn crypto_batch_never_panics() {
+        run_crypto_batch(1311768467463790320, 256);
     }
 }
