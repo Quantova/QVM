@@ -19,11 +19,10 @@ Cryptography is a first class opcode group, and every primitive comes from the Q
 - `HASH` computes SHA3-256 over a memory region.
 - `VERIFY_ML` verifies an ML-DSA-65 signature.
 - `VERIFY_SLH` verifies an SLH-DSA hash based signature.
-- `VRF_VERIFY` verifies a post quantum verifiable random function output and proof.
 - `KEM` runs ML-KEM-768 encapsulation.
-- `MERKLE_VERIFY` verifies a SHA3-256 Merkle authentication path.
+- `MERKLE_VERIFY` verifies a domain separated SHA3-256 Merkle authentication path.
 
-There is no elliptic curve opcode and no classical verify. The gas for the crypto group is scaled from the measured throughput of each primitive, so the hash based schemes cost far more than the lattice ones, matching their real verify times.
+There is no elliptic curve opcode and no classical verify. Each crypto opcode carries a fixed base cost, and its variable length work, the hashed input, the appended message tail, and the Merkle path, is metered per absorbed Keccak block and per Merkle level before the work runs, so a long input cannot be smuggled inside a flat charge. Every crypto dispatch runs behind a firewall that maps a primitive panic to a fault, so gas and rollback still apply.
 
 ## The container format
 
@@ -42,7 +41,7 @@ cargo run -p qtv-vm-fuzz
 cargo deny check
 ```
 
-The suite carries 76 tests across decoding, arithmetic and its overflow faults, memory and stack bounds, control flow, gas metering, the container identifier and selector resolution, and the crypto opcodes against real keys and signatures. The fuzz harness exercises the decoder and interpreter on random input under a fixed gas bound. `cargo deny` enforces the classical crypto ban and the single pinned crypto version.
+The suite covers decoding, arithmetic and its overflow faults, memory and stack bounds, control flow, gas metering including the length scaled crypto charges, the container identifier and selector resolution, the deploy time container verifier, the manifest enforcement on storage access and computed control flow, and the crypto opcodes against real keys and signatures. The fuzz harness exercises the decoder and interpreter on random input under a fixed gas bound, and a second batch drives the verify and KEM opcodes over unconstrained bytes to prove the crypto firewall never lets a primitive panic escape. `cargo deny` enforces the classical crypto ban and the single pinned crypto version.
 
 ## Where it sits in the stack
 
