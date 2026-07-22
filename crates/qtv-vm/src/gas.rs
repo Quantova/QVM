@@ -7,6 +7,30 @@ pub const EFFECT_BYTE: u64 = 2;
 
 pub const EFFECTS_BYTES_CAP: u64 = 1 << 20;
 
+pub const KECCAK_RATE: u64 = 136;
+
+pub const HASH_BLOCK: u64 = 6;
+
+pub const MERKLE_LEVEL: u64 = 8;
+
+pub const VERIFY_MESSAGE_BLOCK: u64 = 6;
+
+fn keccak_blocks(len: u64) -> u64 {
+    len / KECCAK_RATE + 1
+}
+
+pub fn hash_variable(len: u64) -> u64 {
+    keccak_blocks(len).saturating_mul(HASH_BLOCK)
+}
+
+pub fn message_variable(tail: u64) -> u64 {
+    keccak_blocks(tail).saturating_mul(VERIFY_MESSAGE_BLOCK)
+}
+
+pub fn merkle_variable(path_bytes: u64) -> u64 {
+    (path_bytes / 32).saturating_mul(MERKLE_LEVEL)
+}
+
 pub fn cost(op: OpCode) -> u64 {
     match op {
         OpCode::Halt => 0,
@@ -57,7 +81,6 @@ pub fn cost(op: OpCode) -> u64 {
         OpCode::VerifyMl => 1600,
         OpCode::VerifySlh => 64000,
         OpCode::MerkleVerify => 512,
-        OpCode::VrfVerify => 66000,
         OpCode::Kem => 640,
         OpCode::Addr => 64,
     }
@@ -110,7 +133,6 @@ mod tests {
             Instr::VerifyMl { a: 0, b: 0, c: 0 },
             Instr::VerifySlh { a: 0, b: 0, c: 0 },
             Instr::MerkleVerify { a: 0, b: 0, c: 0 },
-            Instr::VrfVerify { a: 0, b: 0, c: 0 },
             Instr::Kem { a: 0, b: 0, c: 0 },
             Instr::Addr { a: 0, b: 0, c: 0 },
         ]
