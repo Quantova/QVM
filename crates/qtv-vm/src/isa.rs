@@ -53,7 +53,6 @@ pub enum OpCode {
     VerifyMl = 113,
     VerifySlh = 114,
     MerkleVerify = 115,
-    VrfVerify = 116,
     Kem = 117,
     Addr = 118,
 }
@@ -101,7 +100,6 @@ impl OpCode {
             113 => OpCode::VerifyMl,
             114 => OpCode::VerifySlh,
             115 => OpCode::MerkleVerify,
-            116 => OpCode::VrfVerify,
             117 => OpCode::Kem,
             118 => OpCode::Addr,
             _ => return None,
@@ -159,7 +157,6 @@ pub enum Instr {
     VerifyMl { a: Reg, b: Reg, c: Reg },
     VerifySlh { a: Reg, b: Reg, c: Reg },
     MerkleVerify { a: Reg, b: Reg, c: Reg },
-    VrfVerify { a: Reg, b: Reg, c: Reg },
     Kem { a: Reg, b: Reg, c: Reg },
     Addr { a: Reg, b: Reg, c: Reg },
 }
@@ -214,7 +211,6 @@ impl Instr {
             Instr::VerifyMl { .. } => OpCode::VerifyMl,
             Instr::VerifySlh { .. } => OpCode::VerifySlh,
             Instr::MerkleVerify { .. } => OpCode::MerkleVerify,
-            Instr::VrfVerify { .. } => OpCode::VrfVerify,
             Instr::Kem { .. } => OpCode::Kem,
             Instr::Addr { .. } => OpCode::Addr,
         }
@@ -279,7 +275,6 @@ impl Instr {
             | Instr::VerifyMl { a, b, c }
             | Instr::VerifySlh { a, b, c }
             | Instr::MerkleVerify { a, b, c }
-            | Instr::VrfVerify { a, b, c }
             | Instr::Kem { a, b, c }
             | Instr::Addr { a, b, c } => {
                 out.push(a);
@@ -463,11 +458,6 @@ pub fn decode(code: &[u8], pc: usize) -> Result<(Instr, usize), DecodeError> {
             b: c.reg()?,
             c: c.reg()?,
         },
-        OpCode::VrfVerify => Instr::VrfVerify {
-            a: c.reg()?,
-            b: c.reg()?,
-            c: c.reg()?,
-        },
         OpCode::Kem => Instr::Kem {
             a: c.reg()?,
             b: c.reg()?,
@@ -595,7 +585,6 @@ mod tests {
             Instr::VerifyMl { a: 1, b: 2, c: 3 },
             Instr::VerifySlh { a: 1, b: 2, c: 3 },
             Instr::MerkleVerify { a: 1, b: 2, c: 3 },
-            Instr::VrfVerify { a: 1, b: 2, c: 3 },
             Instr::Kem { a: 1, b: 2, c: 3 },
             Instr::Addr { a: 1, b: 2, c: 3 },
         ]
