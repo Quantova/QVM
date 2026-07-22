@@ -1,6 +1,6 @@
 
 use qtv_crypto::sha3::sha3_256;
-use qtv_crypto::{ml_dsa, ml_kem, slh_dsa, vrf};
+use qtv_crypto::{ml_dsa, ml_kem, slh_dsa};
 
 use crate::interp::Fault;
 use crate::isa::Reg;
@@ -8,6 +8,28 @@ use crate::state::Machine;
 
 pub const SCHEME_ML_DSA: u64 = 1;
 pub const SCHEME_SLH_DSA: u64 = 2;
+
+pub const ML_DSA_SIGNED_BYTES: u64 = (ml_dsa::PUBLIC_KEY_BYTES + ml_dsa::SIGNATURE_BYTES) as u64;
+pub const SLH_DSA_SIGNED_BYTES: u64 = (slh_dsa::PUBLIC_KEY_BYTES + slh_dsa::SIGNATURE_BYTES) as u64;
+pub const MERKLE_HEADER: u64 = (2 * 32 + 8) as u64;
+
+const MERKLE_LEAF_TAG: u8 = 0x00;
+const MERKLE_NODE_TAG: u8 = 0x01;
+
+fn merkle_leaf(leaf: &[u8; 32]) -> [u8; 32] {
+    let mut buf = [0u8; 33];
+    buf[0] = MERKLE_LEAF_TAG;
+    buf[1..].copy_from_slice(leaf);
+    sha3_256(&buf)
+}
+
+fn merkle_node(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+    let mut buf = [0u8; 65];
+    buf[0] = MERKLE_NODE_TAG;
+    buf[1..33].copy_from_slice(left);
+    buf[33..].copy_from_slice(right);
+    sha3_256(&buf)
+}
 
 pub(crate) fn hash(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), Fault> {
     let ptr = m.reg(a);
@@ -89,45 +111,21 @@ pub(crate) fn merkle_verify(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(
             region[HEADER..].to_vec(),
         )
     };
-    let mut node = leaf;
+    if path.is_empty() {
+        m.set_reg(c, 0);
+        return Ok(());
+    }
+    let mut node = merkle_leaf(&leaf);
     for (level, sibling) in path.chunks_exact(H).enumerate() {
-        let mut pair = [0u8; 2 * H];
+        let sib: [u8; H] = sibling.try_into().map_err(|_| Fault::BadMemory)?;
         let node_on_left = level >= 64 || (index >> level) & 1 == 0;
-        if node_on_left {
-            pair[..H].copy_from_slice(&node);
-            pair[H..].copy_from_slice(sibling);
+        node = if node_on_left {
+            merkle_node(&node, &sib)
         } else {
-            pair[..H].copy_from_slice(sibling);
-            pair[H..].copy_from_slice(&node);
-        }
-        node = sha3_256(&pair);
+            merkle_node(&sib, &node)
+        };
     }
     m.set_reg(c, u64::from(node == root));
-    Ok(())
-}
-
-pub(crate) fn verify_vrf(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), Fault> {
-    const PK: usize = vrf::PUBLIC_KEY_BYTES;
-    const OUT: usize = vrf::OUTPUT_BYTES;
-    const PROOF: usize = vrf::PROOF_BYTES;
-    let ptr = m.reg(a);
-    let len = m.reg(b);
-    let (pk, output, proof, input) = {
-        let region = m.mem_region(ptr, len).ok_or(Fault::BadMemory)?;
-        if region.len() < PK + OUT + PROOF {
-            return Err(Fault::BadMemory);
-        }
-        let pk: [u8; PK] = region[..PK].try_into().map_err(|_| Fault::BadMemory)?;
-        let output: [u8; OUT] = region[PK..PK + OUT]
-            .try_into()
-            .map_err(|_| Fault::BadMemory)?;
-        let proof: [u8; PROOF] = region[PK + OUT..PK + OUT + PROOF]
-            .try_into()
-            .map_err(|_| Fault::BadMemory)?;
-        (pk, output, proof, region[PK + OUT + PROOF..].to_vec())
-    };
-    let ok = vrf::verify(&pk, &input, &output, &proof);
-    m.set_reg(c, u64::from(ok));
     Ok(())
 }
 
@@ -372,13 +370,6 @@ mod tests {
         assert_eq!(verify_slh(&mut m, 0, 1, 2), Err(Fault::BadMemory));
     }
 
-    fn node(left: &[u8], right: &[u8]) -> [u8; 32] {
-        let mut pair = [0u8; 64];
-        pair[..32].copy_from_slice(left);
-        pair[32..].copy_from_slice(right);
-        sha3_256(&pair)
-    }
-
     fn merkle_region(root: &[u8], index: u64, leaf: &[u8], path: &[[u8; 32]]) -> Vec<u8> {
         let mut region = Vec::new();
         region.extend_from_slice(root);
@@ -392,13 +383,14 @@ mod tests {
 
     #[test]
     fn merkle_verify_accepts_valid_and_rejects_tampered() {
-        let leaves: Vec<[u8; 32]> = (0..4u8).map(|i| sha3_256(&[i])).collect();
-        let p01 = node(&leaves[0], &leaves[1]);
-        let p23 = node(&leaves[2], &leaves[3]);
-        let root = node(&p01, &p23);
+        let data: Vec<[u8; 32]> = (0..4u8).map(|i| sha3_256(&[i])).collect();
+        let tagged: Vec<[u8; 32]> = data.iter().map(merkle_leaf).collect();
+        let p01 = merkle_node(&tagged[0], &tagged[1]);
+        let p23 = merkle_node(&tagged[2], &tagged[3]);
+        let root = merkle_node(&p01, &p23);
 
-        let path = [leaves[3], p01];
-        let region = merkle_region(&root, 2, &leaves[2], &path);
+        let path = [tagged[3], p01];
+        let region = merkle_region(&root, 2, &data[2], &path);
 
         let mut m = Machine::new();
         assert!(m.mem_write(0, &region));
@@ -428,30 +420,33 @@ mod tests {
     }
 
     #[test]
-    fn verify_vrf_accepts_valid_and_rejects_wrong() {
-        let (sk, pk) = vrf::keygen(b"quantova vrf verify opcode seed");
-        let input = b"committee sampling input";
-        let (output, proof) = vrf::prove(&sk, input);
+    fn merkle_verify_rejects_an_internal_node_presented_as_a_leaf() {
+        let data: Vec<[u8; 32]> = (0..4u8).map(|i| sha3_256(&[i])).collect();
+        let tagged: Vec<[u8; 32]> = data.iter().map(merkle_leaf).collect();
+        let p01 = merkle_node(&tagged[0], &tagged[1]);
+        let p23 = merkle_node(&tagged[2], &tagged[3]);
+        let root = merkle_node(&p01, &p23);
 
+        let path = [p23];
+        let region = merkle_region(&root, 0, &p01, &path);
         let mut m = Machine::new();
-        load_region(&mut m, &[&pk, &output, &proof, input]);
-        verify_vrf(&mut m, 0, 1, 2).expect("vrf");
-        assert_eq!(m.reg(2), 1);
-
-        let mut bad = output;
-        bad[0] ^= 1;
-        let mut m = Machine::new();
-        load_region(&mut m, &[&pk, &bad, &proof, input]);
-        verify_vrf(&mut m, 0, 1, 2).expect("vrf");
-        assert_eq!(m.reg(2), 0);
+        assert!(m.mem_write(0, &region));
+        m.set_reg(0, 0);
+        m.set_reg(1, region.len() as u64);
+        merkle_verify(&mut m, 0, 1, 2).expect("merkle");
+        assert_eq!(m.reg(2), 0, "an internal node must not verify as a leaf");
     }
 
     #[test]
-    fn verify_vrf_rejects_short_region() {
+    fn merkle_verify_rejects_a_zero_length_path() {
+        let root = sha3_256(b"a committed root");
+        let region = merkle_region(&root, 0, &root, &[]);
         let mut m = Machine::new();
+        assert!(m.mem_write(0, &region));
         m.set_reg(0, 0);
-        m.set_reg(1, 80);
-        assert_eq!(verify_vrf(&mut m, 0, 1, 2), Err(Fault::BadMemory));
+        m.set_reg(1, region.len() as u64);
+        merkle_verify(&mut m, 0, 1, 2).expect("merkle");
+        assert_eq!(m.reg(2), 0, "a proof with no siblings must not verify");
     }
 
     #[test]
