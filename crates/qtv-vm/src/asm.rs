@@ -208,10 +208,6 @@ fn parse_instr(
             want(3)?;
             triple(no, &ops, Triple::MerkleVerify)?
         }
-        "VRFVERIFY" => {
-            want(3)?;
-            triple(no, &ops, Triple::VrfVerify)?
-        }
         "KEM" => {
             want(3)?;
             triple(no, &ops, Triple::Kem)?
@@ -322,7 +318,6 @@ enum Triple {
     VerifyMl,
     VerifySlh,
     MerkleVerify,
-    VrfVerify,
     Kem,
     Addr,
 }
@@ -355,7 +350,6 @@ fn triple(no: usize, ops: &[&str], kind: Triple) -> Result<Instr, AsmError> {
         Triple::VerifyMl => Instr::VerifyMl { a: d, b: a, c: b },
         Triple::VerifySlh => Instr::VerifySlh { a: d, b: a, c: b },
         Triple::MerkleVerify => Instr::MerkleVerify { a: d, b: a, c: b },
-        Triple::VrfVerify => Instr::VrfVerify { a: d, b: a, c: b },
         Triple::Kem => Instr::Kem { a: d, b: a, c: b },
         Triple::Addr => Instr::Addr { a: d, b: a, c: b },
     };
