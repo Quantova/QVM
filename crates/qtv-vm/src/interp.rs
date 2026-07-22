@@ -17,6 +17,7 @@ pub enum Fault {
     BadConst,
     UnknownSelector,
     BadScheme,
+    EffectsTooLarge,
     Decode(DecodeError),
 }
 
@@ -64,6 +65,7 @@ pub struct Interpreter<'a> {
     gas_used: u64,
     storage: BTreeMap<StorageKey, u64>,
     effects: Vec<Effect>,
+    effects_bytes: u64,
 }
 
 impl<'a> Interpreter<'a> {
@@ -76,6 +78,7 @@ impl<'a> Interpreter<'a> {
             gas_used: 0,
             storage: BTreeMap::new(),
             effects: Vec::new(),
+            effects_bytes: 0,
         }
     }
 
@@ -135,6 +138,28 @@ impl<'a> Interpreter<'a> {
                 Step::JumpTo(target) => self.machine.pc = target,
             }
         }
+    }
+
+    fn charge_effect(&mut self, bytes: usize) -> Result<(), Fault> {
+        let n = bytes as u64;
+        let byte_cost = n
+            .checked_mul(crate::gas::EFFECT_BYTE)
+            .ok_or(Fault::OutOfGas)?;
+        let spent = self.gas_used.checked_add(byte_cost).ok_or(Fault::OutOfGas)?;
+        if spent > self.gas_limit {
+            return Err(Fault::OutOfGas);
+        }
+        self.gas_used = spent;
+
+        let retained = self
+            .effects_bytes
+            .checked_add(n)
+            .ok_or(Fault::EffectsTooLarge)?;
+        if retained > crate::gas::EFFECTS_BYTES_CAP {
+            return Err(Fault::EffectsTooLarge);
+        }
+        self.effects_bytes = retained;
+        Ok(())
     }
 
     fn step(&mut self, instr: Instr) -> Result<Step, Fault> {
@@ -304,6 +329,7 @@ impl<'a> Interpreter<'a> {
                     .mem_region(m.reg(a), m.reg(b))
                     .ok_or(Fault::BadMemory)?
                     .to_vec();
+                self.charge_effect(to.len())?;
                 self.effects.push(Effect::Transfer { to, amount });
             }
 
@@ -313,6 +339,7 @@ impl<'a> Interpreter<'a> {
                     .mem_region(m.reg(a), m.reg(b))
                     .ok_or(Fault::BadMemory)?
                     .to_vec();
+                self.charge_effect(data.len())?;
                 self.effects.push(Effect::Event { selector, data });
             }
 
@@ -667,6 +694,7 @@ mod tests {
             out.gas_used,
             3 * crate::gas::cost(OpCode::Ldi)
                 + crate::gas::cost(OpCode::Send)
+                + 32 * crate::gas::EFFECT_BYTE
                 + crate::gas::cost(OpCode::Halt)
         );
     }
@@ -734,6 +762,77 @@ mod tests {
             Interpreter::new(&code, &[], 1000).run(),
             Err(Fault::BadMemory)
         );
+    }
+
+    #[test]
+    fn emit_charges_per_byte_and_a_small_event_is_priced_sanely() {
+        use crate::asm::assemble;
+        let payload = [9u8; 64];
+        let code = assemble("LDI r0, 0\nLDI r1, 64\nLDI r2, 1\nEMIT r0, r1, r2\nHALT")
+            .expect("assemble");
+        let out = Interpreter::new(&code, &[], 10_000)
+            .with_memory(&payload)
+            .run()
+            .expect("halt");
+        assert_eq!(out.effects.len(), 1);
+        assert_eq!(
+            out.gas_used,
+            3 * crate::gas::cost(OpCode::Ldi)
+                + crate::gas::cost(OpCode::Emit)
+                + 64 * crate::gas::EFFECT_BYTE
+                + crate::gas::cost(OpCode::Halt)
+        );
+    }
+
+    #[test]
+    fn emit_loop_over_full_memory_faults_at_the_effects_cap() {
+        use crate::asm::assemble;
+        let code = assemble(
+            "LDI r0, 0\nLDI r1, 65536\nLDI r2, 1\nloop:\nEMIT r0, r1, r2\nJMP loop\nHALT",
+        )
+        .expect("assemble");
+        let res = Interpreter::new(&code, &[], u64::MAX).run();
+        assert_eq!(res, Err(Fault::EffectsTooLarge));
+    }
+
+    #[test]
+    fn emit_loop_runs_out_of_gas_at_the_proportional_cost() {
+        use crate::asm::assemble;
+        let code = assemble(
+            "LDI r0, 0\nLDI r1, 65536\nLDI r2, 1\nloop:\nEMIT r0, r1, r2\nJMP loop\nHALT",
+        )
+        .expect("assemble");
+        let res = Interpreter::new(&code, &[], 500_000).run();
+        assert_eq!(res, Err(Fault::OutOfGas));
+    }
+
+    #[test]
+    fn an_over_cap_emit_surfaces_no_effects_and_rolls_back_state() {
+        use crate::asm::assemble;
+        let key = crate::abi::scalar_key(5);
+        let mut persistent = BTreeMap::new();
+        persistent.insert(key, 1);
+        let code = assemble(
+            "LDI r0, 0\nLDI r1, 123\nSSTORE r0, r1\nLDI r2, 65536\nLDI r3, 1\nloop:\nEMIT r0, r2, r3\nJMP loop\nHALT",
+        )
+        .expect("assemble");
+        let res = Interpreter::new(&code, &[], u64::MAX)
+            .with_storage(persistent.clone())
+            .with_memory(&key)
+            .run();
+        assert_eq!(res, Err(Fault::EffectsTooLarge));
+        assert_eq!(persistent.get(&key), Some(&1));
+    }
+
+    #[test]
+    fn send_charges_per_byte_and_is_bounded_by_the_effects_cap() {
+        use crate::asm::assemble;
+        let code = assemble(
+            "LDI r0, 0\nLDI r1, 65536\nLDI r2, 1\nloop:\nSEND r0, r1, r2\nJMP loop\nHALT",
+        )
+        .expect("assemble");
+        let res = Interpreter::new(&code, &[], u64::MAX).run();
+        assert_eq!(res, Err(Fault::EffectsTooLarge));
     }
 
     #[test]
