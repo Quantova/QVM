@@ -1,3 +1,6 @@
+# Copyright 2026 Quantova Inc
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+
 [package]
 name = "qtv-vm"
 version = "0.2.0"

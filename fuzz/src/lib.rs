@@ -1,3 +1,6 @@
+// Copyright 2026 Quantova Inc
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 //! Fuzz harness. It feeds random bytes and random programs to the decoder and interpreter and
 
 use std::panic::catch_unwind;
