@@ -36,6 +36,12 @@ pub enum VerifyError {
 pub struct StateAccess {
     pub reads: Vec<u64>,
     pub writes: Vec<u64>,
+    // Keyed storage domains this entry may touch, given by their map base. A keyed slot lives at a
+    // runtime hash of a base and a key, which cannot be listed as an exact slot, so the entry declares
+    // the base and the machine authorises any key derived from a declared base. Declaring a base grants
+    // that map's whole keyspace and nothing else.
+    pub keyed_reads: Vec<u64>,
+    pub keyed_writes: Vec<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,6 +85,8 @@ impl Container {
             out.extend_from_slice(&entry.offset.to_be_bytes());
             put_slots(&mut out, &entry.access.reads);
             put_slots(&mut out, &entry.access.writes);
+            put_slots(&mut out, &entry.access.keyed_reads);
+            put_slots(&mut out, &entry.access.keyed_writes);
         }
         out
     }
@@ -176,6 +184,7 @@ mod tests {
                 access: StateAccess {
                     reads: vec![1],
                     writes: vec![2, 3],
+                    ..Default::default()
                 },
             }],
         )
