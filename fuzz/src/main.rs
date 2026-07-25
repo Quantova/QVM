@@ -1,3 +1,6 @@
+// Copyright 2026 Quantova Inc
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 //! Driver that runs a large batch of random inputs through the decoder and interpreter.
 
 use std::time::{SystemTime, UNIX_EPOCH};
