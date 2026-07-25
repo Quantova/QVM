@@ -85,6 +85,8 @@ fn boundaries(code: &[u8]) -> BTreeSet<u32> {
 struct Manifest {
     reads: BTreeSet<StorageKey>,
     writes: BTreeSet<StorageKey>,
+    keyed_reads: BTreeSet<u64>,
+    keyed_writes: BTreeSet<u64>,
     boundaries: BTreeSet<u32>,
 }
 
@@ -108,6 +110,8 @@ pub struct Interpreter<'a> {
     effects: Vec<Effect>,
     effects_bytes: u64,
     manifest: Option<Manifest>,
+    keyed_authorized_reads: BTreeSet<StorageKey>,
+    keyed_authorized_writes: BTreeSet<StorageKey>,
 }
 
 impl<'a> Interpreter<'a> {
@@ -122,6 +126,8 @@ impl<'a> Interpreter<'a> {
             effects: Vec::new(),
             effects_bytes: 0,
             manifest: None,
+            keyed_authorized_reads: BTreeSet::new(),
+            keyed_authorized_writes: BTreeSet::new(),
         }
     }
 
@@ -150,12 +156,16 @@ impl<'a> Interpreter<'a> {
             .iter()
             .map(|&slot| crate::abi::scalar_key(slot))
             .collect();
+        let keyed_reads = entry.access.keyed_reads.iter().copied().collect();
+        let keyed_writes = entry.access.keyed_writes.iter().copied().collect();
         let mut interp = Interpreter::new(&container.code, &container.consts, gas_limit);
         interp.machine.pc = entry.offset;
         interp.gas_used = crate::gas::DISPATCH;
         interp.manifest = Some(Manifest {
             reads,
             writes,
+            keyed_reads,
+            keyed_writes,
             boundaries: boundaries(&container.code),
         });
         Ok(interp)
@@ -237,6 +247,46 @@ impl<'a> Interpreter<'a> {
         match catch_unwind(AssertUnwindSafe(|| f(machine))) {
             Ok(result) => result,
             Err(_) => Err(Fault::CryptoFault),
+        }
+    }
+
+    // Keyed storage authorisation. A keyed slot lives at sha3 of a map base and a runtime key, which
+    // cannot be listed as an exact slot, so an entry declares the base and the machine authorises any
+    // key it derives from a declared base, that map's whole keyspace and nothing else. The base is the
+    // first eight bytes of the hash preimage, written big endian by the code generator, and the machine
+    // derives the key itself here, so a program cannot authorise a key outside a declared map. A declared
+    // write base also grants read, matching the scalar rule that a declared write may be read.
+    fn taint_keyed_from_hash(&mut self, preimage_ptr: u64, len: u64, out_ptr: u64) {
+        if len < 8 {
+            return;
+        }
+        let base = match self.machine.mem_region(preimage_ptr, 8) {
+            Some(head) => u64::from_be_bytes(head.try_into().unwrap()),
+            None => return,
+        };
+        let (is_write, is_read) = match &self.manifest {
+            Some(man) => {
+                let w = man.keyed_writes.contains(&base);
+                (w, w || man.keyed_reads.contains(&base))
+            }
+            None => return,
+        };
+        if !is_write && !is_read {
+            return;
+        }
+        let key = match self.machine.mem_region(out_ptr, STORAGE_KEY_BYTES as u64) {
+            Some(region) => {
+                let mut k = [0u8; STORAGE_KEY_BYTES];
+                k.copy_from_slice(region);
+                k
+            }
+            None => return,
+        };
+        if is_write {
+            self.keyed_authorized_writes.insert(key);
+        }
+        if is_read {
+            self.keyed_authorized_reads.insert(key);
         }
     }
 
@@ -402,7 +452,7 @@ impl<'a> Interpreter<'a> {
             Instr::SLoad { d, a } => {
                 let key = read_key(m, m.reg(a))?;
                 if let Some(man) = &self.manifest {
-                    if !man.can_read(&key) {
+                    if !man.can_read(&key) && !self.keyed_authorized_reads.contains(&key) {
                         return Err(Fault::UndeclaredSlot);
                     }
                 }
@@ -413,7 +463,7 @@ impl<'a> Interpreter<'a> {
                 let key = read_key(m, m.reg(a))?;
                 let val = m.reg(b);
                 if let Some(man) = &self.manifest {
-                    if !man.can_write(&key) {
+                    if !man.can_write(&key) && !self.keyed_authorized_writes.contains(&key) {
                         return Err(Fault::UndeclaredSlot);
                     }
                 }
@@ -441,9 +491,12 @@ impl<'a> Interpreter<'a> {
             }
 
             Instr::Hash { a, b, c } => {
+                let preimage_ptr = m.reg(a);
                 let len = m.reg(b);
+                let out_ptr = m.reg(c);
                 self.charge(crate::gas::hash_variable(len))?;
                 self.run_crypto(|machine| crate::crypto::hash(machine, a, b, c))?;
+                self.taint_keyed_from_hash(preimage_ptr, len, out_ptr);
             }
             Instr::VerifyMl { a, b, c } => {
                 let tail = m.reg(b).saturating_sub(crate::crypto::ML_DSA_SIGNED_BYTES);
@@ -1165,6 +1218,7 @@ mod tests {
                 access: StateAccess {
                     reads: vec![],
                     writes: vec![7],
+                    ..Default::default()
                 },
             }],
         );
@@ -1185,6 +1239,83 @@ mod tests {
     }
 
     #[test]
+    fn a_declared_map_base_authorises_its_whole_keyspace() {
+        use crate::asm::assemble;
+        use crate::container::{selector, Container, Entry, StateAccess};
+        let base: u64 = 1 << 40;
+        let mut mem = Vec::new();
+        mem.extend_from_slice(&base.to_be_bytes());
+        mem.extend_from_slice(&0x00AB_CDEFu64.to_be_bytes());
+        let want = qtv_crypto::sha3::sha3_256(&mem);
+        let code = assemble(
+            "LDI r0, 0\nLDI r1, 16\nLDI r2, 64\nHASH r0, r1, r2\nLDI r3, 64\nLDI r4, 99\nSSTORE r3, r4\nHALT",
+        )
+        .expect("assemble");
+        let sel = selector("credit()");
+        let container = Container::new(
+            code,
+            vec![],
+            vec![Entry {
+                selector: sel,
+                offset: 0,
+                access: StateAccess {
+                    keyed_writes: vec![base],
+                    ..Default::default()
+                },
+            }],
+        );
+        let out = Interpreter::for_entry(&container, sel, 50_000)
+            .expect("entry")
+            .with_memory(&mem)
+            .run()
+            .expect("halt");
+        let mut key = [0u8; STORAGE_KEY_BYTES];
+        key.copy_from_slice(&want);
+        assert_eq!(
+            out.storage.get(&key),
+            Some(&99),
+            "a declared map base authorises writing that map at any key"
+        );
+    }
+
+    #[test]
+    fn an_undeclared_map_still_faults_on_a_keyed_write() {
+        use crate::asm::assemble;
+        use crate::container::{selector, Container, Entry, StateAccess};
+        let written: u64 = 1 << 40;
+        let declared: u64 = (1 << 40) + (1 << 32);
+        let mut mem = Vec::new();
+        mem.extend_from_slice(&written.to_be_bytes());
+        mem.extend_from_slice(&0x00AB_CDEFu64.to_be_bytes());
+        let code = assemble(
+            "LDI r0, 0\nLDI r1, 16\nLDI r2, 64\nHASH r0, r1, r2\nLDI r3, 64\nLDI r4, 99\nSSTORE r3, r4\nHALT",
+        )
+        .expect("assemble");
+        let sel = selector("credit()");
+        let container = Container::new(
+            code,
+            vec![],
+            vec![Entry {
+                selector: sel,
+                offset: 0,
+                access: StateAccess {
+                    keyed_writes: vec![declared],
+                    ..Default::default()
+                },
+            }],
+        );
+        let res = Interpreter::for_entry(&container, sel, 50_000)
+            .expect("entry")
+            .with_memory(&mem)
+            .run();
+        assert_eq!(
+            res,
+            Err(Fault::UndeclaredSlot),
+            "writing a map the entry did not declare must still fault"
+        );
+    }
+
+    #[test]
     fn a_dispatched_entry_may_only_read_declared_slots() {
         use crate::asm::assemble;
         use crate::container::{selector, Container, Entry, StateAccess};
@@ -1199,6 +1330,7 @@ mod tests {
                 access: StateAccess {
                     reads: vec![7],
                     writes: vec![],
+                    ..Default::default()
                 },
             }],
         );
