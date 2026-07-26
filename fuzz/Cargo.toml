@@ -9,5 +9,17 @@ license.workspace = true
 repository.workspace = true
 description = "Fuzz harness that feeds random bytes and random programs to the decoder and interpreter."
 
+[package.metadata]
+cargo-fuzz = true
+
 [dependencies]
 qtv-vm = { path = "../crates/qtv-vm" }
+libfuzzer-sys = "0.4"
+arbitrary = "1"
+
+[[bin]]
+name = "entry_path"
+path = "fuzz_targets/entry_path.rs"
+test = false
+doc = false
+bench = false

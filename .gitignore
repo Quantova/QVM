@@ -4,3 +4,8 @@
 
 Cargo.lock
 
+/fuzz/target
+/fuzz/corpus
+/fuzz/artifacts
+/fuzz/coverage
+
