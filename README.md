@@ -1,8 +1,6 @@
 # QVM
 
-Quantova is a sovereign post quantum Layer 1, built from scratch, sharing no code, no wire format, and no trust assumption with any other chain. It is post quantum end to end, not a classical chain with a post quantum signature bolted on. Every layer is its own, and every layer stands on NIST standardized schemes with no classical escape hatch anywhere.
-
-The QVM is Quantova's execution layer. It is a register machine that runs compiled containers, with the post quantum primitives wired in as first class instructions. It is not the Ethereum virtual machine. The instruction set, the container format, the gas model, and the crypto opcodes are all our own.
+The QVM is the execution layer of Quantova, a sovereign post quantum Layer 1 built from scratch with no classical escape hatch anywhere. It is a register machine that runs compiled containers, with the post quantum primitives wired in as first class instructions. It is not the Ethereum virtual machine. The instruction set, the container format, the gas model, and the crypto opcodes are all our own.
 
 ## What it is
 
