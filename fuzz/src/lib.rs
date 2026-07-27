@@ -8,8 +8,8 @@ use std::panic::catch_unwind;
 use qtv_vm::interp::Interpreter;
 use qtv_vm::isa::{decode, Instr, NUM_REGS};
 
-/// Every metered run is capped at this many gas units. Only a clean halt is free, so a run cannot
-pub const GAS_BOUND: u64 = 100_000;
+/// Every metered run is capped at this many meter units. Only a clean halt is free, so a run cannot
+pub const METER_BOUND: u64 = 100_000;
 
 struct Rng {
     state: u64,
@@ -149,11 +149,11 @@ fn decode_sweep(code: &[u8]) {
     }
 }
 
-/// Decode and run one input. Returns nothing. It must not panic and must terminate within the gas
+/// Decode and run one input. Returns nothing. It must not panic and must terminate within the meter
 fn exercise(code: &[u8], consts: &[u64]) {
     decode_sweep(code);
-    if let Ok(outcome) = Interpreter::new(code, consts, GAS_BOUND).run() {
-        assert!(outcome.gas_used <= GAS_BOUND);
+    if let Ok(outcome) = Interpreter::new(code, consts, METER_BOUND).run() {
+        assert!(outcome.meter_used <= METER_BOUND);
     }
 }
 
@@ -196,7 +196,7 @@ fn rand_crypto_case(rng: &mut Rng) -> (Vec<u8>, Vec<u8>) {
 }
 
 fn exercise_crypto(code: &[u8], mem: &[u8]) {
-    let _ = Interpreter::new(code, &[], GAS_BOUND).with_memory(mem).run();
+    let _ = Interpreter::new(code, &[], METER_BOUND).with_memory(mem).run();
 }
 
 /// Run a batch of adversarial crypto cases. The interpreter firewall must map any primitive panic to

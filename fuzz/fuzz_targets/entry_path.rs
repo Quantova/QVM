@@ -10,11 +10,11 @@ use libfuzzer_sys::fuzz_target;
 
 use qtv_vm::abi::scalar_key;
 use qtv_vm::container::{Container, Entry, StateAccess, SELECTOR_BYTES};
-use qtv_vm::gas::DISPATCH;
+use qtv_vm::meter::DISPATCH;
 use qtv_vm::interp::{Interpreter, StorageKey, STORAGE_KEY_BYTES};
 use qtv_vm::isa::{Instr, NUM_REGS};
 
-const GAS_CAP: u64 = 100_000;
+const METER_CAP: u64 = 100_000;
 
 fn reg(u: &mut Unstructured) -> Result<u8> {
     Ok(u.arbitrary::<u8>()? % NUM_REGS as u8)
@@ -160,7 +160,7 @@ fn drive(u: &mut Unstructured) -> Result<()> {
         selector
     };
 
-    let gas_limit = u.arbitrary::<u64>()? % (GAS_CAP + 1);
+    let meter_limit = u.arbitrary::<u64>()? % (METER_CAP + 1);
 
     let mem_len = u.int_in_range(0..=2048)?;
     let mut mem = vec![0u8; mem_len];
@@ -168,7 +168,7 @@ fn drive(u: &mut Unstructured) -> Result<()> {
 
     let initial = gen_storage(u)?;
 
-    let interp = match Interpreter::for_entry(&container, selector, gas_limit) {
+    let interp = match Interpreter::for_entry(&container, selector, meter_limit) {
         Ok(interp) => interp,
         Err(_) => return Ok(()),
     };
@@ -177,8 +177,8 @@ fn drive(u: &mut Unstructured) -> Result<()> {
         Err(_) => return Ok(()),
     };
 
-    assert!(outcome.gas_used <= gas_limit, "metered run exceeded its budget");
-    assert!(outcome.gas_used >= DISPATCH, "dispatch was not charged");
+    assert!(outcome.meter_used <= meter_limit, "metered run exceeded its budget");
+    assert!(outcome.meter_used >= DISPATCH, "dispatch was not charged");
 
     if let Some(entry) = container.entries.iter().find(|e| e.selector == selector) {
         if entry.access.keyed_writes.is_empty() {

@@ -150,7 +150,7 @@ mod tests {
             if op == OpCode::Halt {
                 assert_eq!(cost(op), 0);
             } else {
-                assert!(cost(op) >= 1, "{op:?} must charge at least one gas");
+                assert!(cost(op) >= 1, "{op:?} must charge at least one meter");
             }
         }
     }

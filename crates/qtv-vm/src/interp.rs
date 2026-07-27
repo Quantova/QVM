@@ -11,7 +11,7 @@ use crate::state::Machine;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fault {
-    OutOfGas,
+    OutOfMeter,
     Overflow,
     DivByZero,
     StackOverflow,
@@ -43,7 +43,7 @@ pub type StorageKey = [u8; STORAGE_KEY_BYTES];
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Outcome {
     pub regs: [u64; NUM_REGS],
-    pub gas_used: u64,
+    pub meter_used: u64,
     pub storage: BTreeMap<StorageKey, u64>,
     pub effects: Vec<Effect>,
 }
@@ -104,8 +104,8 @@ pub struct Interpreter<'a> {
     code: &'a [u8],
     consts: &'a [u64],
     machine: Machine,
-    gas_limit: u64,
-    gas_used: u64,
+    meter_limit: u64,
+    meter_used: u64,
     storage: BTreeMap<StorageKey, u64>,
     effects: Vec<Effect>,
     effects_bytes: u64,
@@ -115,13 +115,13 @@ pub struct Interpreter<'a> {
 }
 
 impl<'a> Interpreter<'a> {
-    pub fn new(code: &'a [u8], consts: &'a [u64], gas_limit: u64) -> Self {
+    pub fn new(code: &'a [u8], consts: &'a [u64], meter_limit: u64) -> Self {
         Interpreter {
             code,
             consts,
             machine: Machine::new(),
-            gas_limit,
-            gas_used: 0,
+            meter_limit,
+            meter_used: 0,
             storage: BTreeMap::new(),
             effects: Vec::new(),
             effects_bytes: 0,
@@ -134,15 +134,15 @@ impl<'a> Interpreter<'a> {
     pub fn for_entry(
         container: &'a Container,
         selector: [u8; SELECTOR_BYTES],
-        gas_limit: u64,
+        meter_limit: u64,
     ) -> Result<Self, Fault> {
         let entry = container
             .entries
             .iter()
             .find(|e| e.selector == selector)
             .ok_or(Fault::UnknownSelector)?;
-        if crate::gas::DISPATCH > gas_limit {
-            return Err(Fault::OutOfGas);
+        if crate::meter::DISPATCH > meter_limit {
+            return Err(Fault::OutOfMeter);
         }
         let reads = entry
             .access
@@ -158,9 +158,9 @@ impl<'a> Interpreter<'a> {
             .collect();
         let keyed_reads = entry.access.keyed_reads.iter().copied().collect();
         let keyed_writes = entry.access.keyed_writes.iter().copied().collect();
-        let mut interp = Interpreter::new(&container.code, &container.consts, gas_limit);
+        let mut interp = Interpreter::new(&container.code, &container.consts, meter_limit);
         interp.machine.pc = entry.offset;
-        interp.gas_used = crate::gas::DISPATCH;
+        interp.meter_used = crate::meter::DISPATCH;
         interp.manifest = Some(Manifest {
             reads,
             writes,
@@ -187,12 +187,12 @@ impl<'a> Interpreter<'a> {
             let pc = self.machine.pc as usize;
             let (instr, len) = decode(self.code, pc).map_err(Fault::Decode)?;
 
-            let cost = crate::gas::cost(instr.opcode());
-            let spent = self.gas_used.checked_add(cost).ok_or(Fault::OutOfGas)?;
-            if spent > self.gas_limit {
-                return Err(Fault::OutOfGas);
+            let cost = crate::meter::cost(instr.opcode());
+            let spent = self.meter_used.checked_add(cost).ok_or(Fault::OutOfMeter)?;
+            if spent > self.meter_limit {
+                return Err(Fault::OutOfMeter);
             }
-            self.gas_used = spent;
+            self.meter_used = spent;
 
             let next = pc.checked_add(len).ok_or(Fault::BadJump)?;
             self.machine.pc = u32::try_from(next).map_err(|_| Fault::BadJump)?;
@@ -202,7 +202,7 @@ impl<'a> Interpreter<'a> {
                 Step::Halt => {
                     return Ok(Outcome {
                         regs: self.machine.regs,
-                        gas_used: self.gas_used,
+                        meter_used: self.meter_used,
                         storage: self.storage,
                         effects: self.effects,
                     })
@@ -213,26 +213,26 @@ impl<'a> Interpreter<'a> {
     }
 
     fn charge(&mut self, amount: u64) -> Result<(), Fault> {
-        let spent = self.gas_used.checked_add(amount).ok_or(Fault::OutOfGas)?;
-        if spent > self.gas_limit {
-            return Err(Fault::OutOfGas);
+        let spent = self.meter_used.checked_add(amount).ok_or(Fault::OutOfMeter)?;
+        if spent > self.meter_limit {
+            return Err(Fault::OutOfMeter);
         }
-        self.gas_used = spent;
+        self.meter_used = spent;
         Ok(())
     }
 
     fn charge_effect(&mut self, bytes: usize) -> Result<(), Fault> {
         let n = bytes as u64;
         let byte_cost = n
-            .checked_mul(crate::gas::EFFECT_BYTE)
-            .ok_or(Fault::OutOfGas)?;
+            .checked_mul(crate::meter::EFFECT_BYTE)
+            .ok_or(Fault::OutOfMeter)?;
         self.charge(byte_cost)?;
 
         let retained = self
             .effects_bytes
             .checked_add(n)
             .ok_or(Fault::EffectsTooLarge)?;
-        if retained > crate::gas::EFFECTS_BYTES_CAP {
+        if retained > crate::meter::EFFECTS_BYTES_CAP {
             return Err(Fault::EffectsTooLarge);
         }
         self.effects_bytes = retained;
@@ -494,23 +494,23 @@ impl<'a> Interpreter<'a> {
                 let preimage_ptr = m.reg(a);
                 let len = m.reg(b);
                 let out_ptr = m.reg(c);
-                self.charge(crate::gas::hash_variable(len))?;
+                self.charge(crate::meter::hash_variable(len))?;
                 self.run_crypto(|machine| crate::crypto::hash(machine, a, b, c))?;
                 self.taint_keyed_from_hash(preimage_ptr, len, out_ptr);
             }
             Instr::VerifyMl { a, b, c } => {
                 let tail = m.reg(b).saturating_sub(crate::crypto::ML_DSA_SIGNED_BYTES);
-                self.charge(crate::gas::message_variable(tail))?;
+                self.charge(crate::meter::message_variable(tail))?;
                 self.run_crypto(|machine| crate::crypto::verify_ml(machine, a, b, c))?;
             }
             Instr::VerifySlh { a, b, c } => {
                 let tail = m.reg(b).saturating_sub(crate::crypto::SLH_DSA_SIGNED_BYTES);
-                self.charge(crate::gas::message_variable(tail))?;
+                self.charge(crate::meter::message_variable(tail))?;
                 self.run_crypto(|machine| crate::crypto::verify_slh(machine, a, b, c))?;
             }
             Instr::MerkleVerify { a, b, c } => {
                 let path = m.reg(b).saturating_sub(crate::crypto::MERKLE_HEADER);
-                self.charge(crate::gas::merkle_variable(path))?;
+                self.charge(crate::meter::merkle_variable(path))?;
                 self.run_crypto(|machine| crate::crypto::merkle_verify(machine, a, b, c))?;
             }
             Instr::Kem { a, b, c } => {
@@ -542,7 +542,7 @@ mod tests {
     fn halts_cleanly() {
         let code = program(&[Instr::Nop, Instr::Halt]);
         let out = Interpreter::new(&code, &[], 100).run().expect("halt");
-        assert_eq!(out.gas_used, 1);
+        assert_eq!(out.meter_used, 1);
     }
 
     #[test]
@@ -553,7 +553,7 @@ mod tests {
     }
 
     #[test]
-    fn computes_value_and_reports_gas() {
+    fn computes_value_and_reports_meter() {
         let code = program(&[
             Instr::Ldi { d: 0, imm: 5 },
             Instr::Ldi { d: 1, imm: 7 },
@@ -562,7 +562,7 @@ mod tests {
         ]);
         let out = Interpreter::new(&code, &[], 100).run().expect("halt");
         assert_eq!(out.regs[2], 12);
-        assert_eq!(out.gas_used, 1 + 1 + 2);
+        assert_eq!(out.meter_used, 1 + 1 + 2);
     }
 
     #[test]
@@ -761,9 +761,9 @@ mod tests {
     }
 
     #[test]
-    fn out_of_gas_faults() {
+    fn out_of_meter_faults() {
         let code = program(&[Instr::Jmp { target: 0 }]);
-        assert_eq!(Interpreter::new(&code, &[], 10).run(), Err(Fault::OutOfGas));
+        assert_eq!(Interpreter::new(&code, &[], 10).run(), Err(Fault::OutOfMeter));
     }
 
     #[test]
@@ -860,11 +860,11 @@ mod tests {
             }]
         );
         assert_eq!(
-            out.gas_used,
-            3 * crate::gas::cost(OpCode::Ldi)
-                + crate::gas::cost(OpCode::Send)
-                + 32 * crate::gas::EFFECT_BYTE
-                + crate::gas::cost(OpCode::Halt)
+            out.meter_used,
+            3 * crate::meter::cost(OpCode::Ldi)
+                + crate::meter::cost(OpCode::Send)
+                + 32 * crate::meter::EFFECT_BYTE
+                + crate::meter::cost(OpCode::Halt)
         );
     }
 
@@ -945,11 +945,11 @@ mod tests {
             .expect("halt");
         assert_eq!(out.effects.len(), 1);
         assert_eq!(
-            out.gas_used,
-            3 * crate::gas::cost(OpCode::Ldi)
-                + crate::gas::cost(OpCode::Emit)
-                + 64 * crate::gas::EFFECT_BYTE
-                + crate::gas::cost(OpCode::Halt)
+            out.meter_used,
+            3 * crate::meter::cost(OpCode::Ldi)
+                + crate::meter::cost(OpCode::Emit)
+                + 64 * crate::meter::EFFECT_BYTE
+                + crate::meter::cost(OpCode::Halt)
         );
     }
 
@@ -965,14 +965,14 @@ mod tests {
     }
 
     #[test]
-    fn emit_loop_runs_out_of_gas_at_the_proportional_cost() {
+    fn emit_loop_runs_out_of_meter_at_the_proportional_cost() {
         use crate::asm::assemble;
         let code = assemble(
             "LDI r0, 0\nLDI r1, 65536\nLDI r2, 1\nloop:\nEMIT r0, r1, r2\nJMP loop\nHALT",
         )
         .expect("assemble");
         let res = Interpreter::new(&code, &[], 500_000).run();
-        assert_eq!(res, Err(Fault::OutOfGas));
+        assert_eq!(res, Err(Fault::OutOfMeter));
     }
 
     #[test]
@@ -1022,8 +1022,8 @@ mod tests {
         let first = u64::from_be_bytes(digest[..8].try_into().unwrap());
         assert_eq!(out.regs[5], first);
         assert_eq!(
-            out.gas_used,
-            1 + 1 + 3 + 1 + 1 + crate::gas::cost(OpCode::Hash) + crate::gas::hash_variable(8) + 3
+            out.meter_used,
+            1 + 1 + 3 + 1 + 1 + crate::meter::cost(OpCode::Hash) + crate::meter::hash_variable(8) + 3
         );
     }
 
@@ -1067,14 +1067,14 @@ mod tests {
         let digest = qtv_crypto::sha3::sha3_256(message);
         let first = u64::from_be_bytes(digest[..8].try_into().unwrap());
         assert_eq!(out.regs[6], first, "hash must match the crypto crate");
-        let expected = 5 * crate::gas::cost(OpCode::Ldi)
-            + crate::gas::cost(OpCode::Hash)
-            + crate::gas::hash_variable(msg_len as u64)
-            + crate::gas::cost(OpCode::MLoad)
-            + crate::gas::cost(OpCode::VerifyMl)
-            + crate::gas::message_variable(msg_len as u64)
-            + crate::gas::cost(OpCode::Halt);
-        assert_eq!(out.gas_used, expected);
+        let expected = 5 * crate::meter::cost(OpCode::Ldi)
+            + crate::meter::cost(OpCode::Hash)
+            + crate::meter::hash_variable(msg_len as u64)
+            + crate::meter::cost(OpCode::MLoad)
+            + crate::meter::cost(OpCode::VerifyMl)
+            + crate::meter::message_variable(msg_len as u64)
+            + crate::meter::cost(OpCode::Halt);
+        assert_eq!(out.meter_used, expected);
     }
 
     fn run_verify(mnemonic: &str, region: &[u8]) -> (u64, u64) {
@@ -1089,14 +1089,14 @@ mod tests {
             .with_memory(region)
             .run()
             .expect("halt");
-        (out.regs[2], out.gas_used)
+        (out.regs[2], out.meter_used)
     }
 
-    fn verify_gas(op: OpCode, variable: u64) -> u64 {
-        2 * crate::gas::cost(OpCode::Ldi)
-            + crate::gas::cost(op)
+    fn verify_meter(op: OpCode, variable: u64) -> u64 {
+        2 * crate::meter::cost(OpCode::Ldi)
+            + crate::meter::cost(op)
             + variable
-            + crate::gas::cost(OpCode::Halt)
+            + crate::meter::cost(OpCode::Halt)
     }
 
     fn merkle_leaf(data: &[u8; 32]) -> [u8; 32] {
@@ -1124,13 +1124,13 @@ mod tests {
         region.extend_from_slice(&pk);
         region.extend_from_slice(&sig);
         region.extend_from_slice(message);
-        let (result, gas) = run_verify("VERIFYSLH", &region);
+        let (result, meter) = run_verify("VERIFYSLH", &region);
         assert_eq!(result, 1);
         assert_eq!(
-            gas,
-            verify_gas(
+            meter,
+            verify_meter(
                 OpCode::VerifySlh,
-                crate::gas::message_variable(message.len() as u64)
+                crate::meter::message_variable(message.len() as u64)
             )
         );
     }
@@ -1151,11 +1151,11 @@ mod tests {
         region.extend_from_slice(&tagged[3]);
         region.extend_from_slice(&p01);
         let path_bytes = (region.len() as u64) - crate::crypto::MERKLE_HEADER;
-        let (result, gas) = run_verify("MERKLEVERIFY", &region);
+        let (result, meter) = run_verify("MERKLEVERIFY", &region);
         assert_eq!(result, 1);
         assert_eq!(
-            gas,
-            verify_gas(OpCode::MerkleVerify, crate::gas::merkle_variable(path_bytes))
+            meter,
+            verify_meter(OpCode::MerkleVerify, crate::meter::merkle_variable(path_bytes))
         );
     }
 
@@ -1166,30 +1166,30 @@ mod tests {
             .expect("assemble");
         let long = assemble("LDI r0, 0\nLDI r1, 40000\nLDI r2, 40000\nHASH r0, r1, r2\nHALT")
             .expect("assemble");
-        let short_gas = Interpreter::new(&short, &[], 1_000_000)
+        let short_meter = Interpreter::new(&short, &[], 1_000_000)
             .run()
             .expect("halt")
-            .gas_used;
-        let long_gas = Interpreter::new(&long, &[], 1_000_000)
+            .meter_used;
+        let long_meter = Interpreter::new(&long, &[], 1_000_000)
             .run()
             .expect("halt")
-            .gas_used;
+            .meter_used;
         assert_eq!(
-            long_gas - short_gas,
-            crate::gas::hash_variable(40000) - crate::gas::hash_variable(8)
+            long_meter - short_meter,
+            crate::meter::hash_variable(40000) - crate::meter::hash_variable(8)
         );
-        assert!(long_gas > short_gas);
+        assert!(long_meter > short_meter);
     }
 
     #[test]
-    fn a_hash_loop_over_full_memory_runs_out_of_gas() {
+    fn a_hash_loop_over_full_memory_runs_out_of_meter() {
         use crate::asm::assemble;
         let code = assemble(
             "LDI r0, 0\nLDI r1, 65536\nLDI r2, 0\nloop:\nHASH r0, r1, r2\nJMP loop\nHALT",
         )
         .expect("assemble");
         let res = Interpreter::new(&code, &[], 500_000).run();
-        assert_eq!(res, Err(Fault::OutOfGas));
+        assert_eq!(res, Err(Fault::OutOfMeter));
     }
 
     #[test]
@@ -1411,11 +1411,11 @@ mod tests {
         let (want_ss, _ct) = ml_kem::encaps(&ek, &msg);
         let first = u64::from_be_bytes(want_ss[..8].try_into().unwrap());
         assert_eq!(out.regs[3], first);
-        let expected = 3 * crate::gas::cost(OpCode::Ldi)
-            + crate::gas::cost(OpCode::Kem)
-            + crate::gas::cost(OpCode::MLoad)
-            + crate::gas::cost(OpCode::Halt);
-        assert_eq!(out.gas_used, expected);
+        let expected = 3 * crate::meter::cost(OpCode::Ldi)
+            + crate::meter::cost(OpCode::Kem)
+            + crate::meter::cost(OpCode::MLoad)
+            + crate::meter::cost(OpCode::Halt);
+        assert_eq!(out.meter_used, expected);
     }
 
     #[test]
@@ -1441,15 +1441,15 @@ mod tests {
         let want = sha3_256(&preimage);
         let first = u64::from_be_bytes(want[..8].try_into().unwrap());
         assert_eq!(out.regs[3], first, "address matches the account model digest");
-        let expected = 3 * crate::gas::cost(OpCode::Ldi)
-            + crate::gas::cost(OpCode::Addr)
-            + crate::gas::cost(OpCode::MLoad)
-            + crate::gas::cost(OpCode::Halt);
-        assert_eq!(out.gas_used, expected);
+        let expected = 3 * crate::meter::cost(OpCode::Ldi)
+            + crate::meter::cost(OpCode::Addr)
+            + crate::meter::cost(OpCode::MLoad)
+            + crate::meter::cost(OpCode::Halt);
+        assert_eq!(out.meter_used, expected);
     }
 
     #[test]
-    fn out_of_gas_rolls_back_storage() {
+    fn out_of_meter_rolls_back_storage() {
         let key = crate::abi::scalar_key(5);
         let mut persistent = BTreeMap::new();
         persistent.insert(key, 1);
@@ -1463,7 +1463,7 @@ mod tests {
             .with_storage(persistent.clone())
             .with_memory(&key)
             .run();
-        assert_eq!(res, Err(Fault::OutOfGas));
+        assert_eq!(res, Err(Fault::OutOfMeter));
         assert_eq!(persistent.get(&key), Some(&1));
     }
 
@@ -1513,8 +1513,8 @@ mod tests {
             .expect("halt");
         assert_eq!(b.regs[0], 222);
         assert_eq!(
-            b.gas_used,
-            crate::gas::DISPATCH + crate::gas::cost(OpCode::Ldi) + crate::gas::cost(OpCode::Halt)
+            b.meter_used,
+            crate::meter::DISPATCH + crate::meter::cost(OpCode::Ldi) + crate::meter::cost(OpCode::Halt)
         );
     }
 
@@ -1527,10 +1527,10 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_over_the_limit_runs_out_of_gas() {
+    fn dispatch_over_the_limit_runs_out_of_meter() {
         let (container, alpha, _beta) = two_entry_container();
-        let res = Interpreter::for_entry(&container, alpha, crate::gas::DISPATCH - 1);
-        assert!(matches!(res, Err(Fault::OutOfGas)));
+        let res = Interpreter::for_entry(&container, alpha, crate::meter::DISPATCH - 1);
+        assert!(matches!(res, Err(Fault::OutOfMeter)));
     }
 
     #[test]
