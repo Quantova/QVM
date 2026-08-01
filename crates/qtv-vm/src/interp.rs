@@ -259,12 +259,9 @@ impl<'a> Interpreter<'a> {
     // first eight bytes of the hash preimage, written big endian by the code generator, and the machine
     // derives the key itself here, so a program cannot authorise a key outside a declared map. A declared
     // write base also grants read, matching the scalar rule that a declared write may be read.
-    fn taint_keyed_from_hash(&mut self, preimage_ptr: u64, len: u64, out_ptr: u64) {
-        if len < 8 {
-            return;
-        }
-        let base = match self.machine.mem_region(preimage_ptr, 8) {
-            Some(head) => u64::from_be_bytes(head.try_into().unwrap()),
+    fn taint_keyed_from_hash(&mut self, base: Option<u64>, out_ptr: u64) {
+        let base = match base {
+            Some(b) => b,
             None => return,
         };
         let (is_write, is_read) = match &self.manifest {
@@ -497,9 +494,15 @@ impl<'a> Interpreter<'a> {
                 let preimage_ptr = m.reg(a);
                 let len = m.reg(b);
                 let out_ptr = m.reg(c);
+                let base = if len >= 8 {
+                    m.mem_region(preimage_ptr, 8)
+                        .map(|head| u64::from_be_bytes(head.try_into().unwrap()))
+                } else {
+                    None
+                };
                 self.charge(crate::meter::hash_variable(len))?;
                 self.run_crypto(|machine| crate::crypto::hash(machine, a, b, c))?;
-                self.taint_keyed_from_hash(preimage_ptr, len, out_ptr);
+                self.taint_keyed_from_hash(base, out_ptr);
             }
             Instr::VerifyMl { a, b, c } => {
                 let tail = m.reg(b).saturating_sub(crate::crypto::ML_DSA_SIGNED_BYTES);
@@ -1306,6 +1309,51 @@ mod tests {
             out.storage.get(&key),
             Some(&99),
             "a declared map base authorises writing that map at any key"
+        );
+    }
+
+    #[test]
+    fn keyed_base_binds_to_the_preimage_even_when_the_digest_overwrites_it() {
+        use crate::asm::assemble;
+        use crate::container::{selector, Container, Entry, StateAccess};
+        let base: u64 = 1 << 40;
+        let mut mem = Vec::new();
+        mem.extend_from_slice(&base.to_be_bytes());
+        mem.extend_from_slice(&0x00AB_CDEFu64.to_be_bytes());
+        let want = qtv_crypto::sha3::sha3_256(&mem);
+        assert_ne!(
+            want[..8],
+            base.to_be_bytes()[..],
+            "the digest prefix must differ from the declared base for this to be a real test"
+        );
+        let code = assemble(
+            "LDI r0, 0\nLDI r1, 16\nLDI r2, 0\nHASH r0, r1, r2\nLDI r4, 99\nSSTORE r0, r4\nHALT",
+        )
+        .expect("assemble");
+        let sel = selector("credit()");
+        let container = Container::new(
+            code,
+            vec![],
+            vec![Entry {
+                selector: sel,
+                offset: 0,
+                access: StateAccess {
+                    keyed_writes: vec![base],
+                    ..Default::default()
+                },
+            }],
+        );
+        let out = Interpreter::for_entry(&container, sel, 50_000)
+            .expect("entry")
+            .with_memory(&mem)
+            .run()
+            .expect("halt");
+        let mut key = [0u8; STORAGE_KEY_BYTES];
+        key.copy_from_slice(&want);
+        assert_eq!(
+            out.storage.get(&key),
+            Some(&99),
+            "authorisation binds to the preimage prefix as written, not the post-hash bytes"
         );
     }
 

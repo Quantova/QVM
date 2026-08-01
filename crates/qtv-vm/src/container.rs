@@ -18,6 +18,8 @@ pub const MAX_CONSTS: usize = 1 << 12;
 
 pub const MAX_ENTRIES: usize = 1 << 8;
 
+pub const MAX_ACCESS_SLOTS: usize = 1 << 12;
+
 const FORMAT_TAG: [u8; 4] = *b"QVM1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +32,7 @@ pub enum VerifyError {
     MisalignedTarget(u32),
     EntryOffsetMisaligned([u8; SELECTOR_BYTES]),
     DuplicateSelector([u8; SELECTOR_BYTES]),
+    AccessListTooLarge([u8; SELECTOR_BYTES]),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -146,6 +149,13 @@ impl Container {
             }
             if !starts.contains(&entry.offset) {
                 return Err(VerifyError::EntryOffsetMisaligned(entry.selector));
+            }
+            let declared = entry.access.reads.len()
+                + entry.access.writes.len()
+                + entry.access.keyed_reads.len()
+                + entry.access.keyed_writes.len();
+            if declared > MAX_ACCESS_SLOTS {
+                return Err(VerifyError::AccessListTooLarge(entry.selector));
             }
         }
         Ok(())
@@ -315,6 +325,64 @@ mod tests {
             container.verify(),
             Err(VerifyError::ConstIndexOutOfRange(5))
         );
+    }
+
+    #[test]
+    fn verify_rejects_an_access_list_past_the_bound() {
+        let code = crate::asm::assemble("HALT").expect("assemble");
+        let sel = selector("run()");
+        let over = Container::new(
+            code.clone(),
+            vec![],
+            vec![Entry {
+                selector: sel,
+                offset: 0,
+                access: StateAccess {
+                    writes: vec![0u64; MAX_ACCESS_SLOTS + 1],
+                    ..Default::default()
+                },
+            }],
+        );
+        assert_eq!(over.verify(), Err(VerifyError::AccessListTooLarge(sel)));
+
+        let split = MAX_ACCESS_SLOTS / 4;
+        let over_by_sum = Container::new(
+            code,
+            vec![],
+            vec![Entry {
+                selector: sel,
+                offset: 0,
+                access: StateAccess {
+                    reads: vec![0u64; split + 1],
+                    writes: vec![0u64; split + 1],
+                    keyed_reads: vec![0u64; split + 1],
+                    keyed_writes: vec![0u64; split + 1],
+                },
+            }],
+        );
+        assert_eq!(
+            over_by_sum.verify(),
+            Err(VerifyError::AccessListTooLarge(sel)),
+            "the bound is on the sum across all four access lists"
+        );
+    }
+
+    #[test]
+    fn verify_accepts_an_access_list_at_the_bound() {
+        let code = crate::asm::assemble("HALT").expect("assemble");
+        let container = Container::new(
+            code,
+            vec![],
+            vec![Entry {
+                selector: selector("run()"),
+                offset: 0,
+                access: StateAccess {
+                    writes: vec![0u64; MAX_ACCESS_SLOTS],
+                    ..Default::default()
+                },
+            }],
+        );
+        assert_eq!(container.verify(), Ok(()));
     }
 
     #[test]
