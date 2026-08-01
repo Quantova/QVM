@@ -1487,7 +1487,7 @@ mod tests {
             .with_memory(&region)
             .run()
             .expect("halt");
-        let (want_ss, _ct) = ml_kem::encaps(&ek, &msg);
+        let (want_ss, _ct) = ml_kem::encaps(&ek, &msg).expect("a canonical encapsulation key");
         let first = u64::from_be_bytes(want_ss[..8].try_into().unwrap());
         assert_eq!(out.regs[3], first);
         let expected = 3 * crate::meter::cost(OpCode::Ldi)

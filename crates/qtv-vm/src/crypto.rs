@@ -149,7 +149,7 @@ pub(crate) fn kem(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), Fault> 
             .map_err(|_| Fault::BadMemory)?;
         (ek, msg)
     };
-    let (shared, ciphertext) = ml_kem::encaps(&ek, &msg);
+    let (shared, ciphertext) = ml_kem::encaps(&ek, &msg).ok_or(Fault::CryptoFault)?;
     let mut output = [0u8; ml_kem::SHARED_SECRET_BYTES + ml_kem::CIPHERTEXT_BYTES];
     output[..ml_kem::SHARED_SECRET_BYTES].copy_from_slice(&shared);
     output[ml_kem::SHARED_SECRET_BYTES..].copy_from_slice(&ciphertext);
@@ -473,7 +473,7 @@ mod tests {
         let ciphertext: [u8; ml_kem::CIPHERTEXT_BYTES] =
             out[ml_kem::SHARED_SECRET_BYTES..].try_into().unwrap();
         assert_eq!(&ml_kem::decaps(&dk, &ciphertext)[..], shared);
-        let (want_ss, want_ct) = ml_kem::encaps(&ek, &msg);
+        let (want_ss, want_ct) = ml_kem::encaps(&ek, &msg).expect("a canonical encapsulation key");
         assert_eq!(shared, &want_ss[..]);
         assert_eq!(&ciphertext[..], &want_ct[..]);
     }
