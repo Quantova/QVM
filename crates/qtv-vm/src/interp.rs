@@ -228,9 +228,12 @@ impl<'a> Interpreter<'a> {
             .ok_or(Fault::OutOfMeter)?;
         self.charge(byte_cost)?;
 
+        let record = n
+            .checked_add(crate::meter::EFFECT_RECORD_OVERHEAD)
+            .ok_or(Fault::EffectsTooLarge)?;
         let retained = self
             .effects_bytes
-            .checked_add(n)
+            .checked_add(record)
             .ok_or(Fault::EffectsTooLarge)?;
         if retained > crate::meter::EFFECTS_BYTES_CAP {
             return Err(Fault::EffectsTooLarge);
@@ -991,6 +994,34 @@ mod tests {
             .run();
         assert_eq!(res, Err(Fault::EffectsTooLarge));
         assert_eq!(persistent.get(&key), Some(&1));
+    }
+
+    #[test]
+    fn a_flood_of_empty_events_is_bounded_by_the_effects_memory_cap() {
+        use crate::asm::assemble;
+        let code = assemble(
+            "LDI r0, 0\nLDI r1, 0\nLDI r2, 7\nLDI r3, 0\nLDI r4, 1\nLDI r5, 60000\nloop:\nEMIT r0, r1, r2\nADDW r3, r3, r4\nLTU r6, r3, r5\nJNZ r6, loop\nHALT",
+        )
+        .expect("assemble");
+        let res = Interpreter::new(&code, &[], u64::MAX).run();
+        assert_eq!(
+            res,
+            Err(Fault::EffectsTooLarge),
+            "empty events must count toward the retained effects cap"
+        );
+    }
+
+    #[test]
+    fn empty_events_up_to_the_cap_still_succeed() {
+        use crate::asm::assemble;
+        let room = crate::meter::EFFECTS_BYTES_CAP / crate::meter::EFFECT_RECORD_OVERHEAD;
+        let count = room - 1;
+        let code = assemble(&format!(
+            "LDI r0, 0\nLDI r1, 0\nLDI r2, 7\nLDI r3, 0\nLDI r4, 1\nLDI r5, {count}\nloop:\nEMIT r0, r1, r2\nADDW r3, r3, r4\nLTU r6, r3, r5\nJNZ r6, loop\nHALT",
+        ))
+        .expect("assemble");
+        let out = Interpreter::new(&code, &[], u64::MAX).run().expect("halt");
+        assert_eq!(out.effects.len() as u64, count);
     }
 
     #[test]

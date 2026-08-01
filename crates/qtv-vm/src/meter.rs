@@ -10,6 +10,8 @@ pub const EFFECT_BYTE: u64 = 2;
 
 pub const EFFECTS_BYTES_CAP: u64 = 1 << 20;
 
+pub const EFFECT_RECORD_OVERHEAD: u64 = 32;
+
 pub const KECCAK_RATE: u64 = 136;
 
 pub const HASH_BLOCK: u64 = 6;
