@@ -24,6 +24,7 @@ pub enum Fault {
     EffectsTooLarge,
     UndeclaredSlot,
     CryptoFault,
+    Malformed,
     Decode(DecodeError),
 }
 
@@ -136,11 +137,24 @@ impl<'a> Interpreter<'a> {
         selector: [u8; SELECTOR_BYTES],
         meter_limit: u64,
     ) -> Result<Self, Fault> {
+        if container.code.len() > crate::container::MAX_CODE_BYTES
+            || container.consts.len() > crate::container::MAX_CONSTS
+            || container.entries.len() > crate::container::MAX_ENTRIES
+        {
+            return Err(Fault::Malformed);
+        }
         let entry = container
             .entries
             .iter()
             .find(|e| e.selector == selector)
             .ok_or(Fault::UnknownSelector)?;
+        if entry.access.reads.len() > crate::container::MAX_ACCESS_SLOTS
+            || entry.access.writes.len() > crate::container::MAX_ACCESS_SLOTS
+            || entry.access.keyed_reads.len() > crate::container::MAX_ACCESS_SLOTS
+            || entry.access.keyed_writes.len() > crate::container::MAX_ACCESS_SLOTS
+        {
+            return Err(Fault::Malformed);
+        }
         if crate::meter::DISPATCH > meter_limit {
             return Err(Fault::OutOfMeter);
         }
