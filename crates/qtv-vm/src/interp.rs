@@ -148,11 +148,11 @@ impl<'a> Interpreter<'a> {
             .iter()
             .find(|e| e.selector == selector)
             .ok_or(Fault::UnknownSelector)?;
-        if entry.access.reads.len() > crate::container::MAX_ACCESS_SLOTS
-            || entry.access.writes.len() > crate::container::MAX_ACCESS_SLOTS
-            || entry.access.keyed_reads.len() > crate::container::MAX_ACCESS_SLOTS
-            || entry.access.keyed_writes.len() > crate::container::MAX_ACCESS_SLOTS
-        {
+        let declared = entry.access.reads.len()
+            + entry.access.writes.len()
+            + entry.access.keyed_reads.len()
+            + entry.access.keyed_writes.len();
+        if declared > crate::container::MAX_ACCESS_SLOTS {
             return Err(Fault::Malformed);
         }
         if crate::meter::DISPATCH > meter_limit {
