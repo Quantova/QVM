@@ -21,7 +21,7 @@ fn reg(u: &mut Unstructured) -> Result<u8> {
 }
 
 fn gen_instr(u: &mut Unstructured, n_consts: usize) -> Result<Instr> {
-    let instr = match u.int_in_range(0u8..=39)? {
+    let instr = match u.int_in_range(0u8..=41)? {
         0 => Instr::Halt,
         1 => Instr::Nop,
         2 => Instr::Mov { d: reg(u)?, a: reg(u)? },
@@ -67,6 +67,8 @@ fn gen_instr(u: &mut Unstructured, n_consts: usize) -> Result<Instr> {
         36 => Instr::Hash { a: reg(u)?, b: reg(u)?, c: reg(u)? },
         37 => Instr::VerifyMl { a: reg(u)?, b: reg(u)?, c: reg(u)? },
         38 => Instr::MerkleVerify { a: reg(u)?, b: reg(u)?, c: reg(u)? },
+        39 => Instr::VerifySlh { a: reg(u)?, b: reg(u)?, c: reg(u)? },
+        40 => Instr::Kem { a: reg(u)?, b: reg(u)?, c: reg(u)? },
         _ => Instr::Addr { a: reg(u)?, b: reg(u)?, c: reg(u)? },
     };
     Ok(instr)
