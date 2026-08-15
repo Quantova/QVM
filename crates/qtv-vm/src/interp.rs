@@ -172,6 +172,10 @@ impl<'a> Interpreter<'a> {
             .collect();
         let keyed_reads = entry.access.keyed_reads.iter().copied().collect();
         let keyed_writes = entry.access.keyed_writes.iter().copied().collect();
+        let bounds = boundaries(&container.code);
+        if !bounds.contains(&entry.offset) {
+            return Err(Fault::Malformed);
+        }
         let mut interp = Interpreter::new(&container.code, &container.consts, meter_limit);
         interp.machine.pc = entry.offset;
         interp.meter_used = crate::meter::DISPATCH;
@@ -180,7 +184,7 @@ impl<'a> Interpreter<'a> {
             writes,
             keyed_reads,
             keyed_writes,
-            boundaries: boundaries(&container.code),
+            boundaries: bounds,
         });
         Ok(interp)
     }
