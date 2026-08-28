@@ -10,4 +10,4 @@ repository.workspace = true
 description = "Quantova register virtual machine core with instruction set, deterministic interpreter, gas model, bytecode container, and assembler."
 
 [dependencies]
-qtv-crypto = { git = "https://github.com/Quantova/Q-Crypto.git", tag = "v0.3.1" }
+qtv-crypto = { git = "https://github.com/Quantova/Q-Crypto.git", rev = "4d73a36c112b91a6a25a6a876f54cdccb729c7de" }
