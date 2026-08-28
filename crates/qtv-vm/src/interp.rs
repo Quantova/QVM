@@ -110,6 +110,7 @@ pub struct Interpreter<'a> {
     storage: BTreeMap<StorageKey, u64>,
     effects: Vec<Effect>,
     effects_bytes: u64,
+    keyed_bytes: u64,
     manifest: Option<Manifest>,
     keyed_authorized_reads: BTreeSet<StorageKey>,
     keyed_authorized_writes: BTreeSet<StorageKey>,
@@ -126,6 +127,7 @@ impl<'a> Interpreter<'a> {
             storage: BTreeMap::new(),
             effects: Vec::new(),
             effects_bytes: 0,
+            keyed_bytes: 0,
             manifest: None,
             keyed_authorized_reads: BTreeSet::new(),
             keyed_authorized_writes: BTreeSet::new(),
@@ -277,20 +279,32 @@ impl<'a> Interpreter<'a> {
     // first eight bytes of the hash preimage, written big endian by the code generator, and the machine
     // derives the key itself here, so a program cannot authorise a key outside a declared map. A declared
     // write base also grants read, matching the scalar rule that a declared write may be read.
-    fn taint_keyed_from_hash(&mut self, base: Option<u64>, out_ptr: u64) {
+    fn charge_keyed(&mut self) -> Result<(), Fault> {
+        let retained = self
+            .keyed_bytes
+            .checked_add(STORAGE_KEY_BYTES as u64)
+            .ok_or(Fault::EffectsTooLarge)?;
+        if retained > crate::meter::EFFECTS_BYTES_CAP {
+            return Err(Fault::EffectsTooLarge);
+        }
+        self.keyed_bytes = retained;
+        Ok(())
+    }
+
+    fn taint_keyed_from_hash(&mut self, base: Option<u64>, out_ptr: u64) -> Result<(), Fault> {
         let base = match base {
             Some(b) => b,
-            None => return,
+            None => return Ok(()),
         };
         let (is_write, is_read) = match &self.manifest {
             Some(man) => {
                 let w = man.keyed_writes.contains(&base);
                 (w, w || man.keyed_reads.contains(&base))
             }
-            None => return,
+            None => return Ok(()),
         };
         if !is_write && !is_read {
-            return;
+            return Ok(());
         }
         let key = match self.machine.mem_region(out_ptr, STORAGE_KEY_BYTES as u64) {
             Some(region) => {
@@ -298,14 +312,15 @@ impl<'a> Interpreter<'a> {
                 k.copy_from_slice(region);
                 k
             }
-            None => return,
+            None => return Ok(()),
         };
-        if is_write {
-            self.keyed_authorized_writes.insert(key);
+        if is_write && self.keyed_authorized_writes.insert(key) {
+            self.charge_keyed()?;
         }
-        if is_read {
-            self.keyed_authorized_reads.insert(key);
+        if is_read && self.keyed_authorized_reads.insert(key) {
+            self.charge_keyed()?;
         }
+        Ok(())
     }
 
     fn target_ok(&self, target: u32) -> bool {
@@ -520,7 +535,7 @@ impl<'a> Interpreter<'a> {
                 };
                 self.charge(crate::meter::hash_variable(len))?;
                 self.run_crypto(|machine| crate::crypto::hash(machine, a, b, c))?;
-                self.taint_keyed_from_hash(base, out_ptr);
+                self.taint_keyed_from_hash(base, out_ptr)?;
             }
             Instr::VerifyMl { a, b, c } => {
                 let tail = m.reg(b).saturating_sub(crate::crypto::ML_DSA_SIGNED_BYTES);
@@ -1327,6 +1342,39 @@ mod tests {
             out.storage.get(&key),
             Some(&99),
             "a declared map base authorises writing that map at any key"
+        );
+    }
+
+    #[test]
+    fn the_keyed_authorization_sets_are_bounded_and_fault_when_flooded() {
+        use crate::asm::assemble;
+        use crate::container::{selector, Container, Entry, StateAccess};
+        let base: u64 = 1 << 40;
+        let code = assemble(
+            "LDI r0, 0\nLDI r1, 16\nLDI r2, 64\nLDI r3, 0\nLDI r4, 1\nLDI r5, 8\nLDI r6, 40000\nloop:\nMSTORE r5, r3\nHASH r0, r1, r2\nADDW r3, r3, r4\nLTU r7, r3, r6\nJNZ r7, loop\nHALT",
+        )
+        .expect("assemble");
+        let sel = selector("credit()");
+        let container = Container::new(
+            code,
+            vec![],
+            vec![Entry {
+                selector: sel,
+                offset: 0,
+                access: StateAccess {
+                    keyed_writes: vec![base],
+                    ..Default::default()
+                },
+            }],
+        );
+        let res = Interpreter::for_entry(&container, sel, u64::MAX)
+            .expect("entry")
+            .with_memory(&base.to_be_bytes())
+            .run();
+        assert_eq!(
+            res,
+            Err(Fault::EffectsTooLarge),
+            "a flood of distinct keyed authorizations must fault at the cap not grow retained memory without limit"
         );
     }
 
