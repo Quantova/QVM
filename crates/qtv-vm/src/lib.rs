@@ -1,4 +1,7 @@
 #![forbid(unsafe_code)]
+#![allow(clippy::collapsible_match)]
+#![allow(clippy::manual_is_multiple_of)]
+#![allow(clippy::assertions_on_constants)]
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
