@@ -3,7 +3,8 @@
 
 [workspace]
 resolver = "2"
-members = ["crates/qtv-vm", "fuzz"]
+members = ["crates/qtv-vm"]
+exclude = ["fuzz"]
 
 [workspace.package]
 edition = "2021"
