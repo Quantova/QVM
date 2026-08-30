@@ -1,7 +1,6 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -30,7 +29,10 @@ pub enum Fault {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
-    Transfer { to: Vec<u8>, amount: u64 },
+    Transfer {
+        to: Vec<u8>,
+        amount: u64,
+    },
     Event {
         selector: [u8; SELECTOR_BYTES],
         data: Vec<u8>,
@@ -233,7 +235,10 @@ impl<'a> Interpreter<'a> {
     }
 
     fn charge(&mut self, amount: u64) -> Result<(), Fault> {
-        let spent = self.meter_used.checked_add(amount).ok_or(Fault::OutOfMeter)?;
+        let spent = self
+            .meter_used
+            .checked_add(amount)
+            .ok_or(Fault::OutOfMeter)?;
         if spent > self.meter_limit {
             return Err(Fault::OutOfMeter);
         }
@@ -607,8 +612,14 @@ mod tests {
     #[test]
     fn mulhi_gives_the_high_half() {
         let code = program(&[
-            Instr::Ldi { d: 0, imm: 1u64 << 32 },
-            Instr::Ldi { d: 1, imm: 1u64 << 32 },
+            Instr::Ldi {
+                d: 0,
+                imm: 1u64 << 32,
+            },
+            Instr::Ldi {
+                d: 1,
+                imm: 1u64 << 32,
+            },
             Instr::MulHi { d: 2, a: 0, b: 1 },
             Instr::MulW { d: 3, a: 0, b: 1 },
             Instr::Halt,
@@ -802,7 +813,10 @@ mod tests {
     #[test]
     fn out_of_meter_faults() {
         let code = program(&[Instr::Jmp { target: 0 }]);
-        assert_eq!(Interpreter::new(&code, &[], 10).run(), Err(Fault::OutOfMeter));
+        assert_eq!(
+            Interpreter::new(&code, &[], 10).run(),
+            Err(Fault::OutOfMeter)
+        );
     }
 
     #[test]
@@ -976,8 +990,8 @@ mod tests {
     fn emit_charges_per_byte_and_a_small_event_is_priced_sanely() {
         use crate::asm::assemble;
         let payload = [9u8; 64];
-        let code = assemble("LDI r0, 0\nLDI r1, 64\nLDI r2, 1\nEMIT r0, r1, r2\nHALT")
-            .expect("assemble");
+        let code =
+            assemble("LDI r0, 0\nLDI r1, 64\nLDI r2, 1\nEMIT r0, r1, r2\nHALT").expect("assemble");
         let out = Interpreter::new(&code, &[], 10_000)
             .with_memory(&payload)
             .run()
@@ -995,10 +1009,9 @@ mod tests {
     #[test]
     fn emit_loop_over_full_memory_faults_at_the_effects_cap() {
         use crate::asm::assemble;
-        let code = assemble(
-            "LDI r0, 0\nLDI r1, 65536\nLDI r2, 1\nloop:\nEMIT r0, r1, r2\nJMP loop\nHALT",
-        )
-        .expect("assemble");
+        let code =
+            assemble("LDI r0, 0\nLDI r1, 65536\nLDI r2, 1\nloop:\nEMIT r0, r1, r2\nJMP loop\nHALT")
+                .expect("assemble");
         let res = Interpreter::new(&code, &[], u64::MAX).run();
         assert_eq!(res, Err(Fault::EffectsTooLarge));
     }
@@ -1006,10 +1019,9 @@ mod tests {
     #[test]
     fn emit_loop_runs_out_of_meter_at_the_proportional_cost() {
         use crate::asm::assemble;
-        let code = assemble(
-            "LDI r0, 0\nLDI r1, 65536\nLDI r2, 1\nloop:\nEMIT r0, r1, r2\nJMP loop\nHALT",
-        )
-        .expect("assemble");
+        let code =
+            assemble("LDI r0, 0\nLDI r1, 65536\nLDI r2, 1\nloop:\nEMIT r0, r1, r2\nJMP loop\nHALT")
+                .expect("assemble");
         let res = Interpreter::new(&code, &[], 500_000).run();
         assert_eq!(res, Err(Fault::OutOfMeter));
     }
@@ -1063,10 +1075,9 @@ mod tests {
     #[test]
     fn send_charges_per_byte_and_is_bounded_by_the_effects_cap() {
         use crate::asm::assemble;
-        let code = assemble(
-            "LDI r0, 0\nLDI r1, 65536\nLDI r2, 1\nloop:\nSEND r0, r1, r2\nJMP loop\nHALT",
-        )
-        .expect("assemble");
+        let code =
+            assemble("LDI r0, 0\nLDI r1, 65536\nLDI r2, 1\nloop:\nSEND r0, r1, r2\nJMP loop\nHALT")
+                .expect("assemble");
         let res = Interpreter::new(&code, &[], u64::MAX).run();
         assert_eq!(res, Err(Fault::EffectsTooLarge));
     }
@@ -1090,7 +1101,13 @@ mod tests {
         assert_eq!(out.regs[5], first);
         assert_eq!(
             out.meter_used,
-            1 + 1 + 3 + 1 + 1 + crate::meter::cost(OpCode::Hash) + crate::meter::hash_variable(8) + 3
+            1 + 1
+                + 3
+                + 1
+                + 1
+                + crate::meter::cost(OpCode::Hash)
+                + crate::meter::hash_variable(8)
+                + 3
         );
     }
 
@@ -1222,7 +1239,10 @@ mod tests {
         assert_eq!(result, 1);
         assert_eq!(
             meter,
-            verify_meter(OpCode::MerkleVerify, crate::meter::merkle_variable(path_bytes))
+            verify_meter(
+                OpCode::MerkleVerify,
+                crate::meter::merkle_variable(path_bytes)
+            )
         );
     }
 
@@ -1251,10 +1271,9 @@ mod tests {
     #[test]
     fn a_hash_loop_over_full_memory_runs_out_of_meter() {
         use crate::asm::assemble;
-        let code = assemble(
-            "LDI r0, 0\nLDI r1, 65536\nLDI r2, 0\nloop:\nHASH r0, r1, r2\nJMP loop\nHALT",
-        )
-        .expect("assemble");
+        let code =
+            assemble("LDI r0, 0\nLDI r1, 65536\nLDI r2, 0\nloop:\nHASH r0, r1, r2\nJMP loop\nHALT")
+                .expect("assemble");
         let res = Interpreter::new(&code, &[], 500_000).run();
         assert_eq!(res, Err(Fault::OutOfMeter));
     }
@@ -1509,7 +1528,9 @@ mod tests {
                 access: StateAccess::default(),
             }],
         );
-        let res = Interpreter::for_entry(&container, sel, 5000).expect("entry").run();
+        let res = Interpreter::for_entry(&container, sel, 5000)
+            .expect("entry")
+            .run();
         assert_eq!(res, Err(Fault::BadJump));
     }
 
@@ -1585,7 +1606,10 @@ mod tests {
         preimage.extend_from_slice(&pk);
         let want = sha3_256(&preimage);
         let first = u64::from_be_bytes(want[..8].try_into().unwrap());
-        assert_eq!(out.regs[3], first, "address matches the account model digest");
+        assert_eq!(
+            out.regs[3], first,
+            "address matches the account model digest"
+        );
         let expected = 3 * crate::meter::cost(OpCode::Ldi)
             + crate::meter::cost(OpCode::Addr)
             + crate::meter::cost(OpCode::MLoad)
@@ -1659,7 +1683,9 @@ mod tests {
         assert_eq!(b.regs[0], 222);
         assert_eq!(
             b.meter_used,
-            crate::meter::DISPATCH + crate::meter::cost(OpCode::Ldi) + crate::meter::cost(OpCode::Halt)
+            crate::meter::DISPATCH
+                + crate::meter::cost(OpCode::Ldi)
+                + crate::meter::cost(OpCode::Halt)
         );
     }
 

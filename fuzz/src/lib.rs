@@ -196,7 +196,9 @@ fn rand_crypto_case(rng: &mut Rng) -> (Vec<u8>, Vec<u8>) {
 }
 
 fn exercise_crypto(code: &[u8], mem: &[u8]) {
-    let _ = Interpreter::new(code, &[], METER_BOUND).with_memory(mem).run();
+    let _ = Interpreter::new(code, &[], METER_BOUND)
+        .with_memory(mem)
+        .run();
 }
 
 /// Run a batch of adversarial crypto cases. The interpreter firewall must map any primitive panic to

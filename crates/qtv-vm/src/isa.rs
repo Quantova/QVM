@@ -1,7 +1,6 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-
 pub const NUM_REGS: usize = 16;
 
 pub type Reg = u8;
@@ -566,9 +565,7 @@ mod tests {
             Instr::Pop { d: 15 },
             Instr::MLoad { d: 0, a: 1 },
             Instr::MStore { a: 0, b: 1 },
-            Instr::Jmp {
-                target: 3735928559,
-            },
+            Instr::Jmp { target: 3735928559 },
             Instr::Jz {
                 a: 2,
                 target: 12648430,
@@ -577,9 +574,7 @@ mod tests {
                 a: 2,
                 target: 12648430,
             },
-            Instr::Call {
-                target: 4096,
-            },
+            Instr::Call { target: 4096 },
             Instr::SLoad { d: 3, a: 4 },
             Instr::SStore { a: 3, b: 4 },
             Instr::Send { a: 1, b: 2, c: 3 },

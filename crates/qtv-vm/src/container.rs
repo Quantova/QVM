@@ -1,7 +1,6 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-
 use std::collections::BTreeSet;
 
 use qtv_crypto::sha3::sha3_256;
@@ -279,7 +278,10 @@ mod tests {
     #[test]
     fn verify_rejects_a_jump_into_the_middle_of_an_instruction() {
         let code = crate::asm::assemble("LDI r0, 1\nJMP 3\nHALT").expect("assemble");
-        assert_eq!(one_entry(code, 0).verify(), Err(VerifyError::MisalignedTarget(3)));
+        assert_eq!(
+            one_entry(code, 0).verify(),
+            Err(VerifyError::MisalignedTarget(3))
+        );
     }
 
     #[test]

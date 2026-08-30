@@ -1,7 +1,6 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-
 use crate::isa::{Reg, NUM_REGS};
 
 pub const STACK_LIMIT: usize = 1024;

@@ -10,9 +10,9 @@ use libfuzzer_sys::fuzz_target;
 
 use qtv_vm::abi::scalar_key;
 use qtv_vm::container::{Container, Entry, StateAccess, SELECTOR_BYTES};
-use qtv_vm::meter::DISPATCH;
 use qtv_vm::interp::{Interpreter, StorageKey, STORAGE_KEY_BYTES};
 use qtv_vm::isa::{Instr, NUM_REGS};
+use qtv_vm::meter::DISPATCH;
 
 const METER_CAP: u64 = 100_000;
 
@@ -24,52 +24,186 @@ fn gen_instr(u: &mut Unstructured, n_consts: usize) -> Result<Instr> {
     let instr = match u.int_in_range(0u8..=41)? {
         0 => Instr::Halt,
         1 => Instr::Nop,
-        2 => Instr::Mov { d: reg(u)?, a: reg(u)? },
-        3 => Instr::Ldi { d: reg(u)?, imm: u.arbitrary()? },
+        2 => Instr::Mov {
+            d: reg(u)?,
+            a: reg(u)?,
+        },
+        3 => Instr::Ldi {
+            d: reg(u)?,
+            imm: u.arbitrary()?,
+        },
         4 => {
             if n_consts == 0 {
                 Instr::Nop
             } else {
-                Instr::Ldc { d: reg(u)?, idx: (u.arbitrary::<u16>()? as usize % n_consts) as u16 }
+                Instr::Ldc {
+                    d: reg(u)?,
+                    idx: (u.arbitrary::<u16>()? as usize % n_consts) as u16,
+                }
             }
         }
-        5 => Instr::Add { d: reg(u)?, a: reg(u)?, b: reg(u)? },
-        6 => Instr::Sub { d: reg(u)?, a: reg(u)?, b: reg(u)? },
-        7 => Instr::Mul { d: reg(u)?, a: reg(u)?, b: reg(u)? },
-        8 => Instr::Div { d: reg(u)?, a: reg(u)?, b: reg(u)? },
-        9 => Instr::Rem { d: reg(u)?, a: reg(u)?, b: reg(u)? },
-        10 => Instr::AddW { d: reg(u)?, a: reg(u)?, b: reg(u)? },
-        11 => Instr::SubW { d: reg(u)?, a: reg(u)?, b: reg(u)? },
-        12 => Instr::MulW { d: reg(u)?, a: reg(u)?, b: reg(u)? },
-        13 => Instr::MulHi { d: reg(u)?, a: reg(u)?, b: reg(u)? },
-        14 => Instr::And { d: reg(u)?, a: reg(u)?, b: reg(u)? },
-        15 => Instr::Or { d: reg(u)?, a: reg(u)?, b: reg(u)? },
-        16 => Instr::Xor { d: reg(u)?, a: reg(u)?, b: reg(u)? },
-        17 => Instr::Not { d: reg(u)?, a: reg(u)? },
-        18 => Instr::Shl { d: reg(u)?, a: reg(u)?, b: reg(u)? },
-        19 => Instr::Shr { d: reg(u)?, a: reg(u)?, b: reg(u)? },
-        20 => Instr::Eq { d: reg(u)?, a: reg(u)?, b: reg(u)? },
-        21 => Instr::LtU { d: reg(u)?, a: reg(u)?, b: reg(u)? },
-        22 => Instr::GtU { d: reg(u)?, a: reg(u)?, b: reg(u)? },
+        5 => Instr::Add {
+            d: reg(u)?,
+            a: reg(u)?,
+            b: reg(u)?,
+        },
+        6 => Instr::Sub {
+            d: reg(u)?,
+            a: reg(u)?,
+            b: reg(u)?,
+        },
+        7 => Instr::Mul {
+            d: reg(u)?,
+            a: reg(u)?,
+            b: reg(u)?,
+        },
+        8 => Instr::Div {
+            d: reg(u)?,
+            a: reg(u)?,
+            b: reg(u)?,
+        },
+        9 => Instr::Rem {
+            d: reg(u)?,
+            a: reg(u)?,
+            b: reg(u)?,
+        },
+        10 => Instr::AddW {
+            d: reg(u)?,
+            a: reg(u)?,
+            b: reg(u)?,
+        },
+        11 => Instr::SubW {
+            d: reg(u)?,
+            a: reg(u)?,
+            b: reg(u)?,
+        },
+        12 => Instr::MulW {
+            d: reg(u)?,
+            a: reg(u)?,
+            b: reg(u)?,
+        },
+        13 => Instr::MulHi {
+            d: reg(u)?,
+            a: reg(u)?,
+            b: reg(u)?,
+        },
+        14 => Instr::And {
+            d: reg(u)?,
+            a: reg(u)?,
+            b: reg(u)?,
+        },
+        15 => Instr::Or {
+            d: reg(u)?,
+            a: reg(u)?,
+            b: reg(u)?,
+        },
+        16 => Instr::Xor {
+            d: reg(u)?,
+            a: reg(u)?,
+            b: reg(u)?,
+        },
+        17 => Instr::Not {
+            d: reg(u)?,
+            a: reg(u)?,
+        },
+        18 => Instr::Shl {
+            d: reg(u)?,
+            a: reg(u)?,
+            b: reg(u)?,
+        },
+        19 => Instr::Shr {
+            d: reg(u)?,
+            a: reg(u)?,
+            b: reg(u)?,
+        },
+        20 => Instr::Eq {
+            d: reg(u)?,
+            a: reg(u)?,
+            b: reg(u)?,
+        },
+        21 => Instr::LtU {
+            d: reg(u)?,
+            a: reg(u)?,
+            b: reg(u)?,
+        },
+        22 => Instr::GtU {
+            d: reg(u)?,
+            a: reg(u)?,
+            b: reg(u)?,
+        },
         23 => Instr::Push { a: reg(u)? },
         24 => Instr::Pop { d: reg(u)? },
-        25 => Instr::MLoad { d: reg(u)?, a: reg(u)? },
-        26 => Instr::MStore { a: reg(u)?, b: reg(u)? },
-        27 => Instr::Jmp { target: u.arbitrary()? },
-        28 => Instr::Jz { a: reg(u)?, target: u.arbitrary()? },
-        29 => Instr::Jnz { a: reg(u)?, target: u.arbitrary()? },
-        30 => Instr::Call { target: u.arbitrary()? },
+        25 => Instr::MLoad {
+            d: reg(u)?,
+            a: reg(u)?,
+        },
+        26 => Instr::MStore {
+            a: reg(u)?,
+            b: reg(u)?,
+        },
+        27 => Instr::Jmp {
+            target: u.arbitrary()?,
+        },
+        28 => Instr::Jz {
+            a: reg(u)?,
+            target: u.arbitrary()?,
+        },
+        29 => Instr::Jnz {
+            a: reg(u)?,
+            target: u.arbitrary()?,
+        },
+        30 => Instr::Call {
+            target: u.arbitrary()?,
+        },
         31 => Instr::Ret,
-        32 => Instr::SLoad { d: reg(u)?, a: reg(u)? },
-        33 => Instr::SStore { a: reg(u)?, b: reg(u)? },
-        34 => Instr::Send { a: reg(u)?, b: reg(u)?, c: reg(u)? },
-        35 => Instr::Emit { a: reg(u)?, b: reg(u)?, c: reg(u)? },
-        36 => Instr::Hash { a: reg(u)?, b: reg(u)?, c: reg(u)? },
-        37 => Instr::VerifyMl { a: reg(u)?, b: reg(u)?, c: reg(u)? },
-        38 => Instr::MerkleVerify { a: reg(u)?, b: reg(u)?, c: reg(u)? },
-        39 => Instr::VerifySlh { a: reg(u)?, b: reg(u)?, c: reg(u)? },
-        40 => Instr::Kem { a: reg(u)?, b: reg(u)?, c: reg(u)? },
-        _ => Instr::Addr { a: reg(u)?, b: reg(u)?, c: reg(u)? },
+        32 => Instr::SLoad {
+            d: reg(u)?,
+            a: reg(u)?,
+        },
+        33 => Instr::SStore {
+            a: reg(u)?,
+            b: reg(u)?,
+        },
+        34 => Instr::Send {
+            a: reg(u)?,
+            b: reg(u)?,
+            c: reg(u)?,
+        },
+        35 => Instr::Emit {
+            a: reg(u)?,
+            b: reg(u)?,
+            c: reg(u)?,
+        },
+        36 => Instr::Hash {
+            a: reg(u)?,
+            b: reg(u)?,
+            c: reg(u)?,
+        },
+        37 => Instr::VerifyMl {
+            a: reg(u)?,
+            b: reg(u)?,
+            c: reg(u)?,
+        },
+        38 => Instr::MerkleVerify {
+            a: reg(u)?,
+            b: reg(u)?,
+            c: reg(u)?,
+        },
+        39 => Instr::VerifySlh {
+            a: reg(u)?,
+            b: reg(u)?,
+            c: reg(u)?,
+        },
+        40 => Instr::Kem {
+            a: reg(u)?,
+            b: reg(u)?,
+            c: reg(u)?,
+        },
+        _ => Instr::Addr {
+            a: reg(u)?,
+            b: reg(u)?,
+            c: reg(u)?,
+        },
     };
     Ok(instr)
 }
@@ -103,7 +237,9 @@ fn gen_storage(u: &mut Unstructured) -> Result<BTreeMap<StorageKey, u64>> {
 
 fn drive(u: &mut Unstructured) -> Result<()> {
     let n_consts = u.int_in_range(0..=8)?;
-    let consts: Vec<u64> = (0..n_consts).map(|_| u.arbitrary()).collect::<Result<_>>()?;
+    let consts: Vec<u64> = (0..n_consts)
+        .map(|_| u.arbitrary())
+        .collect::<Result<_>>()?;
 
     let n_instr = u.int_in_range(0..=48)?;
     let mut instrs: Vec<Instr> = Vec::with_capacity(n_instr + 1);
@@ -179,7 +315,10 @@ fn drive(u: &mut Unstructured) -> Result<()> {
         Err(_) => return Ok(()),
     };
 
-    assert!(outcome.meter_used <= meter_limit, "metered run exceeded its budget");
+    assert!(
+        outcome.meter_used <= meter_limit,
+        "metered run exceeded its budget"
+    );
     assert!(outcome.meter_used >= DISPATCH, "dispatch was not charged");
 
     if let Some(entry) = container.entries.iter().find(|e| e.selector == selector) {
