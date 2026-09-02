@@ -53,6 +53,8 @@ pub fn cost(op: OpCode) -> u64 {
         OpCode::SubW => 2,
         OpCode::MulW => 3,
         OpCode::MulHi => 3,
+        OpCode::DivW => 8,
+        OpCode::RemW => 8,
 
         OpCode::And => 1,
         OpCode::Or => 1,

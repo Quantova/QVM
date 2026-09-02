@@ -23,6 +23,8 @@ pub enum OpCode {
     SubW = 25,
     MulW = 26,
     MulHi = 27,
+    DivW = 28,
+    RemW = 29,
 
     And = 32,
     Or = 33,
@@ -76,6 +78,8 @@ impl OpCode {
             25 => OpCode::SubW,
             26 => OpCode::MulW,
             27 => OpCode::MulHi,
+            28 => OpCode::DivW,
+            29 => OpCode::RemW,
             32 => OpCode::And,
             33 => OpCode::Or,
             34 => OpCode::Xor,
@@ -114,53 +118,207 @@ impl OpCode {
 pub enum Instr {
     Halt,
     Nop,
-    Mov { d: Reg, a: Reg },
-    Ldi { d: Reg, imm: u64 },
-    Ldc { d: Reg, idx: u16 },
+    Mov {
+        d: Reg,
+        a: Reg,
+    },
+    Ldi {
+        d: Reg,
+        imm: u64,
+    },
+    Ldc {
+        d: Reg,
+        idx: u16,
+    },
 
-    Add { d: Reg, a: Reg, b: Reg },
-    Sub { d: Reg, a: Reg, b: Reg },
-    Mul { d: Reg, a: Reg, b: Reg },
-    Div { d: Reg, a: Reg, b: Reg },
-    Rem { d: Reg, a: Reg, b: Reg },
-    AddW { d: Reg, a: Reg, b: Reg },
-    SubW { d: Reg, a: Reg, b: Reg },
-    MulW { d: Reg, a: Reg, b: Reg },
-    MulHi { d: Reg, a: Reg, b: Reg },
+    Add {
+        d: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    Sub {
+        d: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    Mul {
+        d: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    Div {
+        d: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    Rem {
+        d: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    AddW {
+        d: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    SubW {
+        d: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    MulW {
+        d: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    MulHi {
+        d: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    DivW {
+        dlo: Reg,
+        dhi: Reg,
+        alo: Reg,
+        ahi: Reg,
+        blo: Reg,
+        bhi: Reg,
+    },
+    RemW {
+        dlo: Reg,
+        dhi: Reg,
+        alo: Reg,
+        ahi: Reg,
+        blo: Reg,
+        bhi: Reg,
+    },
 
-    And { d: Reg, a: Reg, b: Reg },
-    Or { d: Reg, a: Reg, b: Reg },
-    Xor { d: Reg, a: Reg, b: Reg },
-    Not { d: Reg, a: Reg },
-    Shl { d: Reg, a: Reg, b: Reg },
-    Shr { d: Reg, a: Reg, b: Reg },
-    Eq { d: Reg, a: Reg, b: Reg },
-    LtU { d: Reg, a: Reg, b: Reg },
-    GtU { d: Reg, a: Reg, b: Reg },
+    And {
+        d: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    Or {
+        d: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    Xor {
+        d: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    Not {
+        d: Reg,
+        a: Reg,
+    },
+    Shl {
+        d: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    Shr {
+        d: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    Eq {
+        d: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    LtU {
+        d: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    GtU {
+        d: Reg,
+        a: Reg,
+        b: Reg,
+    },
 
-    Push { a: Reg },
-    Pop { d: Reg },
-    MLoad { d: Reg, a: Reg },
-    MStore { a: Reg, b: Reg },
+    Push {
+        a: Reg,
+    },
+    Pop {
+        d: Reg,
+    },
+    MLoad {
+        d: Reg,
+        a: Reg,
+    },
+    MStore {
+        a: Reg,
+        b: Reg,
+    },
 
-    Jmp { target: u32 },
-    Jz { a: Reg, target: u32 },
-    Jnz { a: Reg, target: u32 },
-    Call { target: u32 },
+    Jmp {
+        target: u32,
+    },
+    Jz {
+        a: Reg,
+        target: u32,
+    },
+    Jnz {
+        a: Reg,
+        target: u32,
+    },
+    Call {
+        target: u32,
+    },
     Ret,
 
-    SLoad { d: Reg, a: Reg },
-    SStore { a: Reg, b: Reg },
+    SLoad {
+        d: Reg,
+        a: Reg,
+    },
+    SStore {
+        a: Reg,
+        b: Reg,
+    },
 
-    Send { a: Reg, b: Reg, c: Reg },
-    Emit { a: Reg, b: Reg, c: Reg },
+    Send {
+        a: Reg,
+        b: Reg,
+        c: Reg,
+    },
+    Emit {
+        a: Reg,
+        b: Reg,
+        c: Reg,
+    },
 
-    Hash { a: Reg, b: Reg, c: Reg },
-    VerifyMl { a: Reg, b: Reg, c: Reg },
-    VerifySlh { a: Reg, b: Reg, c: Reg },
-    MerkleVerify { a: Reg, b: Reg, c: Reg },
-    Kem { a: Reg, b: Reg, c: Reg },
-    Addr { a: Reg, b: Reg, c: Reg },
+    Hash {
+        a: Reg,
+        b: Reg,
+        c: Reg,
+    },
+    VerifyMl {
+        a: Reg,
+        b: Reg,
+        c: Reg,
+    },
+    VerifySlh {
+        a: Reg,
+        b: Reg,
+        c: Reg,
+    },
+    MerkleVerify {
+        a: Reg,
+        b: Reg,
+        c: Reg,
+    },
+    Kem {
+        a: Reg,
+        b: Reg,
+        c: Reg,
+    },
+    Addr {
+        a: Reg,
+        b: Reg,
+        c: Reg,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,6 +345,8 @@ impl Instr {
             Instr::SubW { .. } => OpCode::SubW,
             Instr::MulW { .. } => OpCode::MulW,
             Instr::MulHi { .. } => OpCode::MulHi,
+            Instr::DivW { .. } => OpCode::DivW,
+            Instr::RemW { .. } => OpCode::RemW,
             Instr::And { .. } => OpCode::And,
             Instr::Or { .. } => OpCode::Or,
             Instr::Xor { .. } => OpCode::Xor,
@@ -228,6 +388,29 @@ impl Instr {
             | Instr::SLoad { d, a } => {
                 out.push(d);
                 out.push(a);
+            }
+            Instr::DivW {
+                dlo,
+                dhi,
+                alo,
+                ahi,
+                blo,
+                bhi,
+            }
+            | Instr::RemW {
+                dlo,
+                dhi,
+                alo,
+                ahi,
+                blo,
+                bhi,
+            } => {
+                out.push(dlo);
+                out.push(dhi);
+                out.push(alo);
+                out.push(ahi);
+                out.push(blo);
+                out.push(bhi);
             }
             Instr::MStore { a, b } | Instr::SStore { a, b } => {
                 out.push(a);
@@ -316,6 +499,22 @@ pub fn decode(code: &[u8], pc: usize) -> Result<(Instr, usize), DecodeError> {
         OpCode::SLoad => Instr::SLoad {
             d: c.reg()?,
             a: c.reg()?,
+        },
+        OpCode::DivW => Instr::DivW {
+            dlo: c.reg()?,
+            dhi: c.reg()?,
+            alo: c.reg()?,
+            ahi: c.reg()?,
+            blo: c.reg()?,
+            bhi: c.reg()?,
+        },
+        OpCode::RemW => Instr::RemW {
+            dlo: c.reg()?,
+            dhi: c.reg()?,
+            alo: c.reg()?,
+            ahi: c.reg()?,
+            blo: c.reg()?,
+            bhi: c.reg()?,
         },
         OpCode::MStore => Instr::MStore {
             a: c.reg()?,

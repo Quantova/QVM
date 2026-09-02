@@ -388,6 +388,34 @@ impl<'a> Interpreter<'a> {
                 let v = ((m.reg(a) as u128 * m.reg(b) as u128) >> 64) as u64;
                 m.set_reg(d, v);
             }
+            Instr::DivW {
+                dlo,
+                dhi,
+                alo,
+                ahi,
+                blo,
+                bhi,
+            } => {
+                let n = ((m.reg(ahi) as u128) << 64) | m.reg(alo) as u128;
+                let v = ((m.reg(bhi) as u128) << 64) | m.reg(blo) as u128;
+                let q = n.checked_div(v).ok_or(Fault::DivByZero)?;
+                m.set_reg(dlo, q as u64);
+                m.set_reg(dhi, (q >> 64) as u64);
+            }
+            Instr::RemW {
+                dlo,
+                dhi,
+                alo,
+                ahi,
+                blo,
+                bhi,
+            } => {
+                let n = ((m.reg(ahi) as u128) << 64) | m.reg(alo) as u128;
+                let v = ((m.reg(bhi) as u128) << 64) | m.reg(blo) as u128;
+                let r = n.checked_rem(v).ok_or(Fault::DivByZero)?;
+                m.set_reg(dlo, r as u64);
+                m.set_reg(dhi, (r >> 64) as u64);
+            }
 
             Instr::And { d, a, b } => {
                 let v = m.reg(a) & m.reg(b);
@@ -607,6 +635,124 @@ mod tests {
         let out = Interpreter::new(&code, &[], 100).run().expect("halt");
         assert_eq!(out.regs[2], 12);
         assert_eq!(out.meter_used, 1 + 1 + 2);
+    }
+
+    #[test]
+    fn divw_divides_a_full_wide_value() {
+        let code = program(&[
+            Instr::Ldi { d: 0, imm: 0 },
+            Instr::Ldi { d: 1, imm: 1 },
+            Instr::Ldi { d: 2, imm: 4 },
+            Instr::Ldi { d: 3, imm: 0 },
+            Instr::DivW {
+                dlo: 4,
+                dhi: 5,
+                alo: 0,
+                ahi: 1,
+                blo: 2,
+                bhi: 3,
+            },
+            Instr::Halt,
+        ]);
+        let out = Interpreter::new(&code, &[], 100).run().expect("halt");
+        assert_eq!(out.regs[4], 1u64 << 62, "two to the sixty four over four");
+        assert_eq!(out.regs[5], 0);
+    }
+
+    #[test]
+    fn divw_keeps_a_quotient_that_needs_both_words() {
+        let code = program(&[
+            Instr::Ldi { d: 0, imm: 0 },
+            Instr::Ldi { d: 1, imm: 6 },
+            Instr::Ldi { d: 2, imm: 2 },
+            Instr::Ldi { d: 3, imm: 0 },
+            Instr::DivW {
+                dlo: 4,
+                dhi: 5,
+                alo: 0,
+                ahi: 1,
+                blo: 2,
+                bhi: 3,
+            },
+            Instr::Halt,
+        ]);
+        let out = Interpreter::new(&code, &[], 100).run().expect("halt");
+        assert_eq!(out.regs[4], 0);
+        assert_eq!(out.regs[5], 3, "the quotient keeps its high word");
+    }
+
+    #[test]
+    fn remw_gives_the_wide_remainder() {
+        let code = program(&[
+            Instr::Ldi { d: 0, imm: 7 },
+            Instr::Ldi { d: 1, imm: 0 },
+            Instr::Ldi { d: 2, imm: 4 },
+            Instr::Ldi { d: 3, imm: 0 },
+            Instr::RemW {
+                dlo: 4,
+                dhi: 5,
+                alo: 0,
+                ahi: 1,
+                blo: 2,
+                bhi: 3,
+            },
+            Instr::Halt,
+        ]);
+        let out = Interpreter::new(&code, &[], 100).run().expect("halt");
+        assert_eq!(out.regs[4], 3);
+        assert_eq!(out.regs[5], 0);
+    }
+
+    #[test]
+    fn a_wide_divide_by_zero_faults_rather_than_wrapping() {
+        for instr in [
+            Instr::DivW {
+                dlo: 4,
+                dhi: 5,
+                alo: 0,
+                ahi: 1,
+                blo: 2,
+                bhi: 3,
+            },
+            Instr::RemW {
+                dlo: 4,
+                dhi: 5,
+                alo: 0,
+                ahi: 1,
+                blo: 2,
+                bhi: 3,
+            },
+        ] {
+            let code = program(&[
+                Instr::Ldi { d: 0, imm: 9 },
+                Instr::Ldi { d: 1, imm: 0 },
+                Instr::Ldi { d: 2, imm: 0 },
+                Instr::Ldi { d: 3, imm: 0 },
+                instr,
+                Instr::Halt,
+            ]);
+            assert_eq!(
+                Interpreter::new(&code, &[], 100).run().unwrap_err(),
+                Fault::DivByZero
+            );
+        }
+    }
+
+    #[test]
+    fn a_wide_divide_round_trips_through_encoding() {
+        let original = Instr::DivW {
+            dlo: 1,
+            dhi: 2,
+            alo: 3,
+            ahi: 4,
+            blo: 5,
+            bhi: 6,
+        };
+        let mut bytes = Vec::new();
+        original.encode(&mut bytes);
+        let (back, len) = crate::isa::decode(&bytes, 0).expect("decodes");
+        assert_eq!(back, original);
+        assert_eq!(len, bytes.len());
     }
 
     #[test]
