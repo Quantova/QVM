@@ -48,6 +48,10 @@ pub struct Outcome {
     pub regs: [u64; NUM_REGS],
     pub meter_used: u64,
     pub storage: BTreeMap<StorageKey, u64>,
+    /// Slots this execution actually wrote. A caller that stores each slot
+    /// separately writes back only these, instead of rewriting every slot the
+    /// contract owns to change one of them.
+    pub dirty: BTreeSet<StorageKey>,
     pub effects: Vec<Effect>,
 }
 
@@ -110,6 +114,10 @@ pub struct Interpreter<'a> {
     meter_limit: u64,
     meter_used: u64,
     storage: BTreeMap<StorageKey, u64>,
+    /// Fetches a slot the cache has not seen. Without one the cache is the whole
+    /// world, which is the old behaviour and what the tests rely on.
+    loader: Option<&'a dyn Fn(&StorageKey) -> u64>,
+    dirty: BTreeSet<StorageKey>,
     effects: Vec<Effect>,
     effects_bytes: u64,
     keyed_bytes: u64,
@@ -127,6 +135,8 @@ impl<'a> Interpreter<'a> {
             meter_limit,
             meter_used: 0,
             storage: BTreeMap::new(),
+            loader: None,
+            dirty: BTreeSet::new(),
             effects: Vec::new(),
             effects_bytes: 0,
             keyed_bytes: 0,
@@ -198,6 +208,13 @@ impl<'a> Interpreter<'a> {
         self
     }
 
+    /// Read slots on demand rather than being handed every slot up front. This is
+    /// what lets a contract hold more state than a single call could afford to load.
+    pub fn with_storage_loader(mut self, loader: &'a dyn Fn(&StorageKey) -> u64) -> Self {
+        self.loader = Some(loader);
+        self
+    }
+
     pub fn with_memory(mut self, data: &[u8]) -> Self {
         let n = data.len().min(self.machine.mem.len());
         self.machine.mem[..n].copy_from_slice(&data[..n]);
@@ -226,6 +243,7 @@ impl<'a> Interpreter<'a> {
                         regs: self.machine.regs,
                         meter_used: self.meter_used,
                         storage: self.storage,
+                        dirty: self.dirty,
                         effects: self.effects,
                     })
                 }
@@ -522,7 +540,14 @@ impl<'a> Interpreter<'a> {
                         return Err(Fault::UndeclaredSlot);
                     }
                 }
-                let v = self.storage.get(&key).copied().unwrap_or(0);
+                let v = match self.storage.get(&key) {
+                    Some(v) => *v,
+                    None => {
+                        let fetched = self.loader.map(|f| f(&key)).unwrap_or(0);
+                        self.storage.insert(key, fetched);
+                        fetched
+                    }
+                };
                 m.set_reg(d, v);
             }
             Instr::SStore { a, b } => {
@@ -534,6 +559,7 @@ impl<'a> Interpreter<'a> {
                     }
                 }
                 self.storage.insert(key, val);
+                self.dirty.insert(key);
             }
 
             Instr::Send { a, b, c } => {
@@ -969,6 +995,40 @@ mod tests {
     fn jump_out_of_range_faults() {
         let code = program(&[Instr::Jmp { target: 9999 }]);
         assert_eq!(Interpreter::new(&code, &[], 100).run(), Err(Fault::BadJump));
+    }
+
+    #[test]
+    fn a_slot_is_fetched_on_demand_and_only_writes_are_reported_dirty() {
+        // The key lives in memory at offset 0. The interpreter is handed NO storage,
+        // so any value it reads can only have come from the loader.
+        let key = crate::abi::scalar_key(7);
+        let code = program(&[
+            Instr::Ldi { d: 0, imm: 0 },
+            Instr::SLoad { d: 1, a: 0 },
+            Instr::Ldi { d: 2, imm: 1 },
+            Instr::Add { d: 1, a: 1, b: 2 },
+            Instr::SStore { a: 0, b: 1 },
+            Instr::Halt,
+        ]);
+        let loader = |k: &StorageKey| -> u64 {
+            if *k == key {
+                41
+            } else {
+                0
+            }
+        };
+        let out = Interpreter::new(&code, &[], 20_000)
+            .with_memory(&key)
+            .with_storage_loader(&loader)
+            .run()
+            .expect("halt");
+        assert_eq!(out.regs[1], 42, "the slot was fetched on demand");
+        assert_eq!(out.storage.get(&key), Some(&42));
+        assert!(
+            out.dirty.contains(&key),
+            "the written slot is reported dirty"
+        );
+        assert_eq!(out.dirty.len(), 1, "only the written slot is dirty");
     }
 
     #[test]
