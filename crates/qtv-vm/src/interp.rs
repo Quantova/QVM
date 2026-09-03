@@ -52,6 +52,12 @@ pub struct Outcome {
     /// separately writes back only these, instead of rewriting every slot the
     /// contract owns to change one of them.
     pub dirty: BTreeSet<StorageKey>,
+    /// How many slots this execution had to FETCH through the loader. Separating
+    /// reads from writes stopped a read looking like a write, but it also took reads
+    /// out of the caller's per slot charge, which made walking an unbounded keyspace
+    /// free. A read costs the node a trie lookup exactly like a write does, so the
+    /// count has to leave the machine for the charge to see it.
+    pub fetched: usize,
     pub effects: Vec<Effect>,
 }
 
@@ -248,6 +254,7 @@ impl<'a> Interpreter<'a> {
                         meter_used: self.meter_used,
                         storage: self.storage,
                         dirty: self.dirty,
+                        fetched: self.loaded.len(),
                         effects: self.effects,
                     })
                 }
@@ -1040,6 +1047,31 @@ mod tests {
         assert!(
             out.storage.is_empty(),
             "a slot only read must not appear in the outcome storage"
+        );
+    }
+
+    #[test]
+    fn a_fetched_slot_is_counted_so_a_read_is_never_free() {
+        // Reads cost the node a trie lookup exactly like writes do. When fetched
+        // slots moved into their own cache they left the caller's per slot charge
+        // behind, so a call could walk an unbounded keyspace for nothing.
+        let key = crate::abi::scalar_key(7);
+        let code = program(&[
+            Instr::Ldi { d: 0, imm: 0 },
+            Instr::SLoad { d: 1, a: 0 },
+            Instr::SLoad { d: 2, a: 0 },
+            Instr::Halt,
+        ]);
+        let out = Interpreter::new(&code, &[], 20_000)
+            .with_memory(&key)
+            .with_storage_loader(&|_k| 41)
+            .run()
+            .expect("halt");
+        assert_eq!(out.fetched, 1, "the slot the loader served is counted");
+        assert!(out.dirty.is_empty(), "reading still writes nothing back");
+        assert!(
+            out.storage.is_empty(),
+            "a read still never lands in the written set"
         );
     }
 
