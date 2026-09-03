@@ -117,6 +117,9 @@ pub struct Interpreter<'a> {
     /// Fetches a slot the cache has not seen. Without one the cache is the whole
     /// world, which is the old behaviour and what the tests rely on.
     loader: Option<&'a dyn Fn(&StorageKey) -> u64>,
+    /// Slots fetched through the loader. Kept apart from `storage` so a read never
+    /// looks like a write in the outcome.
+    loaded: BTreeMap<StorageKey, u64>,
     dirty: BTreeSet<StorageKey>,
     effects: Vec<Effect>,
     effects_bytes: u64,
@@ -136,6 +139,7 @@ impl<'a> Interpreter<'a> {
             meter_used: 0,
             storage: BTreeMap::new(),
             loader: None,
+            loaded: BTreeMap::new(),
             dirty: BTreeSet::new(),
             effects: Vec::new(),
             effects_bytes: 0,
@@ -540,13 +544,25 @@ impl<'a> Interpreter<'a> {
                         return Err(Fault::UndeclaredSlot);
                     }
                 }
+                // A read must stay a read. Caching a fetched slot into `storage`
+                // made every key merely READ appear in the outcome alongside the keys
+                // written, so a caller that persists the outcome would write back
+                // slots the entry never touched. Fetched values live in their own
+                // cache, and with no loader the miss is definitionally zero and
+                // nothing is recorded at all, exactly as before.
                 let v = match self.storage.get(&key) {
                     Some(v) => *v,
-                    None => {
-                        let fetched = self.loader.map(|f| f(&key)).unwrap_or(0);
-                        self.storage.insert(key, fetched);
-                        fetched
-                    }
+                    None => match self.loaded.get(&key) {
+                        Some(v) => *v,
+                        None => match self.loader {
+                            Some(f) => {
+                                let fetched = f(&key);
+                                self.loaded.insert(key, fetched);
+                                fetched
+                            }
+                            None => 0,
+                        },
+                    },
                 };
                 m.set_reg(d, v);
             }
@@ -995,6 +1011,36 @@ mod tests {
     fn jump_out_of_range_faults() {
         let code = program(&[Instr::Jmp { target: 9999 }]);
         assert_eq!(Interpreter::new(&code, &[], 100).run(), Err(Fault::BadJump));
+    }
+
+    #[test]
+    fn reading_a_slot_never_makes_it_look_written() {
+        // A read-only entry must leave the outcome storage empty, otherwise a caller
+        // that persists the outcome writes back slots the entry never touched.
+        let key = crate::abi::scalar_key(3);
+        let code = program(&[
+            Instr::Ldi { d: 0, imm: 0 },
+            Instr::SLoad { d: 1, a: 0 },
+            Instr::Halt,
+        ]);
+        let loader = |k: &StorageKey| -> u64 {
+            if *k == key {
+                77
+            } else {
+                0
+            }
+        };
+        let out = Interpreter::new(&code, &[], 20_000)
+            .with_memory(&key)
+            .with_storage_loader(&loader)
+            .run()
+            .expect("halt");
+        assert_eq!(out.regs[1], 77, "the value was fetched");
+        assert!(out.dirty.is_empty(), "a read is not a write");
+        assert!(
+            out.storage.is_empty(),
+            "a slot only read must not appear in the outcome storage"
+        );
     }
 
     #[test]
