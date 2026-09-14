@@ -84,10 +84,10 @@ pub fn cost(op: OpCode) -> u64 {
         OpCode::Emit => 200,
 
         OpCode::Hash => 32,
-        OpCode::VerifyMl => 1600,
-        OpCode::VerifySlh => 64000,
+        OpCode::VerifyMl => 8000,
+        OpCode::VerifySlh => 160000,
         OpCode::MerkleVerify => 512,
-        OpCode::Kem => 640,
+        OpCode::Kem => 3200,
         OpCode::Addr => 64,
     }
 }
