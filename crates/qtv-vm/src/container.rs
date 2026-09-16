@@ -312,6 +312,35 @@ mod tests {
     }
 
     #[test]
+    fn verify_rejects_an_oversize_constant_pool() {
+        let code = vec![crate::isa::OpCode::Halt as u8];
+        let container = Container::new(
+            code,
+            vec![0u64; MAX_CONSTS + 1],
+            vec![Entry {
+                selector: selector("run()"),
+                offset: 0,
+                access: StateAccess::default(),
+            }],
+        );
+        assert_eq!(container.verify(), Err(VerifyError::ConstsTooLarge));
+    }
+
+    #[test]
+    fn verify_rejects_too_many_entries() {
+        let code = vec![crate::isa::OpCode::Halt as u8];
+        let entries = (0..=MAX_ENTRIES)
+            .map(|i| Entry {
+                selector: (i as u32).to_be_bytes(),
+                offset: 0,
+                access: StateAccess::default(),
+            })
+            .collect();
+        let container = Container::new(code, vec![], entries);
+        assert_eq!(container.verify(), Err(VerifyError::EntriesTooLarge));
+    }
+
+    #[test]
     fn verify_rejects_a_const_index_past_the_pool() {
         let code = crate::asm::assemble("LDC r0, 5\nHALT").expect("assemble");
         let container = Container::new(
