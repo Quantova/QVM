@@ -1015,6 +1015,16 @@ mod tests {
     }
 
     #[test]
+    fn a_constant_index_past_the_pool_faults() {
+        let code = program(&[Instr::Ldc { d: 0, idx: 3 }]);
+        assert_eq!(
+            Interpreter::new(&code, &[7, 8], 100).run(),
+            Err(Fault::BadConst),
+            "a constant index past the pool is refused at run time, not read out of bounds"
+        );
+    }
+
+    #[test]
     fn jump_out_of_range_faults() {
         let code = program(&[Instr::Jmp { target: 9999 }]);
         assert_eq!(Interpreter::new(&code, &[], 100).run(), Err(Fault::BadJump));
