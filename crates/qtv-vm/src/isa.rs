@@ -838,3 +838,111 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod decoder_hostile_input_tests {
+    use super::*;
+
+    fn registers_of(instr: &Instr) -> Vec<Reg> {
+        match *instr {
+            Instr::Halt | Instr::Nop | Instr::Ret => vec![],
+            Instr::Mov { d, a } | Instr::Not { d, a } | Instr::MLoad { d, a } => vec![d, a],
+            Instr::Ldi { d, .. } | Instr::Ldc { d, .. } | Instr::Pop { d } => vec![d],
+            Instr::Add { d, a, b }
+            | Instr::Sub { d, a, b }
+            | Instr::Mul { d, a, b }
+            | Instr::Div { d, a, b }
+            | Instr::Rem { d, a, b }
+            | Instr::AddW { d, a, b }
+            | Instr::SubW { d, a, b }
+            | Instr::MulW { d, a, b }
+            | Instr::MulHi { d, a, b }
+            | Instr::And { d, a, b }
+            | Instr::Or { d, a, b }
+            | Instr::Xor { d, a, b }
+            | Instr::Shl { d, a, b }
+            | Instr::Shr { d, a, b }
+            | Instr::Eq { d, a, b }
+            | Instr::LtU { d, a, b }
+            | Instr::GtU { d, a, b } => vec![d, a, b],
+            Instr::DivW { dlo, dhi, alo, ahi, blo, bhi }
+            | Instr::RemW { dlo, dhi, alo, ahi, blo, bhi } => vec![dlo, dhi, alo, ahi, blo, bhi],
+            Instr::Push { a } => vec![a],
+            Instr::MStore { a, b } => vec![a, b],
+            Instr::Jmp { .. } | Instr::Call { .. } => vec![],
+            Instr::Jz { a, .. } | Instr::Jnz { a, .. } => vec![a],
+            Instr::SLoad { d, a } => vec![d, a],
+            Instr::SStore { a, b } => vec![a, b],
+            Instr::Send { a, b, c }
+            | Instr::Emit { a, b, c }
+            | Instr::Hash { a, b, c }
+            | Instr::VerifyMl { a, b, c }
+            | Instr::VerifySlh { a, b, c }
+            | Instr::MerkleVerify { a, b, c }
+            | Instr::Kem { a, b, c }
+            | Instr::Addr { a, b, c } => vec![a, b, c],
+        }
+    }
+
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+    }
+
+    // A deployed container is attacker supplied bytes. The interpreter fuzz target builds
+    // well formed instructions, so it never drives this path, which is the one that meets
+    // hostile code first.
+    #[test]
+    fn decoding_arbitrary_bytes_never_panics_and_never_yields_a_bad_register() {
+        let mut rng = Rng(0x9E3779B97F4A7C15);
+        for _ in 0..300_000u64 {
+            let len = (rng.next() % 24) as usize;
+            let mut code = vec![0u8; len];
+            for byte in code.iter_mut() {
+                *byte = (rng.next() & 0xFF) as u8;
+            }
+            let pc = if code.is_empty() {
+                0
+            } else {
+                (rng.next() as usize) % code.len()
+            };
+            if let Ok((instr, size)) = decode(&code, pc) {
+                assert!(size > 0, "a decoded instruction must advance the counter");
+                assert!(
+                    pc.checked_add(size).is_some_and(|end| end <= code.len()),
+                    "a decode that succeeded read past the code it was given"
+                );
+                for r in registers_of(&instr) {
+                    assert!(
+                        (r as usize) < NUM_REGS,
+                        "decode admitted register {r}, which indexes the register file out of \
+                         bounds and panics the machine on a crafted container"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_register_past_the_file_is_refused_at_every_operand_position() {
+        for opcode in 0u8..=255 {
+            for bad in [NUM_REGS as u8, 200, 255] {
+                let code = vec![opcode, bad, bad, bad, bad, bad, bad, bad];
+                if let Ok((instr, _)) = decode(&code, 0) {
+                    for r in registers_of(&instr) {
+                        assert!(
+                            (r as usize) < NUM_REGS,
+                            "opcode {opcode} accepted register {r} past the file"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
