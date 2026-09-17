@@ -10,3 +10,6 @@ exclude = ["fuzz"]
 edition = "2021"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/Quantova/QVM"
+
+[profile.release]
+overflow-checks = true
