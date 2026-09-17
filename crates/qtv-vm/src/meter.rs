@@ -113,6 +113,8 @@ mod tests {
             Instr::SubW { d: 0, a: 0, b: 0 },
             Instr::MulW { d: 0, a: 0, b: 0 },
             Instr::MulHi { d: 0, a: 0, b: 0 },
+            Instr::DivW { dlo: 0, dhi: 0, alo: 0, ahi: 0, blo: 0, bhi: 0 },
+            Instr::RemW { dlo: 0, dhi: 0, alo: 0, ahi: 0, blo: 0, bhi: 0 },
             Instr::And { d: 0, a: 0, b: 0 },
             Instr::Or { d: 0, a: 0, b: 0 },
             Instr::Xor { d: 0, a: 0, b: 0 },
@@ -145,6 +147,73 @@ mod tests {
         .iter()
         .map(Instr::opcode)
         .collect()
+    }
+
+    // An exhaustive match with no wildcard. Adding an instruction to the ISA without
+    // adding it to every_opcode above stops this compiling, which is the point. The
+    // free instruction check is only as good as the list it walks, and that list was
+    // already missing the wide divide and remainder.
+    fn is_listed(instr: &Instr) -> bool {
+        let name = match instr {
+            Instr::Halt => "Halt",
+            Instr::Nop => "Nop",
+            Instr::Mov { .. } => "Mov",
+            Instr::Ldi { .. } => "Ldi",
+            Instr::Ldc { .. } => "Ldc",
+            Instr::Add { .. } => "Add",
+            Instr::Sub { .. } => "Sub",
+            Instr::Mul { .. } => "Mul",
+            Instr::Div { .. } => "Div",
+            Instr::Rem { .. } => "Rem",
+            Instr::AddW { .. } => "AddW",
+            Instr::SubW { .. } => "SubW",
+            Instr::MulW { .. } => "MulW",
+            Instr::MulHi { .. } => "MulHi",
+            Instr::DivW { .. } => "DivW",
+            Instr::RemW { .. } => "RemW",
+            Instr::And { .. } => "And",
+            Instr::Or { .. } => "Or",
+            Instr::Xor { .. } => "Xor",
+            Instr::Not { .. } => "Not",
+            Instr::Shl { .. } => "Shl",
+            Instr::Shr { .. } => "Shr",
+            Instr::Eq { .. } => "Eq",
+            Instr::LtU { .. } => "LtU",
+            Instr::GtU { .. } => "GtU",
+            Instr::Push { .. } => "Push",
+            Instr::Pop { .. } => "Pop",
+            Instr::MLoad { .. } => "MLoad",
+            Instr::MStore { .. } => "MStore",
+            Instr::Jmp { .. } => "Jmp",
+            Instr::Jz { .. } => "Jz",
+            Instr::Jnz { .. } => "Jnz",
+            Instr::Call { .. } => "Call",
+            Instr::Ret => "Ret",
+            Instr::SLoad { .. } => "SLoad",
+            Instr::SStore { .. } => "SStore",
+            Instr::Send { .. } => "Send",
+            Instr::Emit { .. } => "Emit",
+            Instr::Hash { .. } => "Hash",
+            Instr::VerifyMl { .. } => "VerifyMl",
+            Instr::VerifySlh { .. } => "VerifySlh",
+            Instr::MerkleVerify { .. } => "MerkleVerify",
+            Instr::Kem { .. } => "Kem",
+            Instr::Addr { .. } => "Addr",
+        };
+        let _ = name;
+        true
+    }
+
+    #[test]
+    fn the_free_instruction_check_walks_every_instruction_in_the_isa() {
+        let listed = every_opcode();
+        assert_eq!(
+            listed.len(),
+            44,
+            "every_opcode no longer matches the instruction set, so only_halt_is_free is \
+             walking a partial list and a new free instruction would go unnoticed"
+        );
+        assert!(is_listed(&Instr::Halt));
     }
 
     #[test]
