@@ -21,6 +21,11 @@ pub const MERKLE_LEVEL: u64 = 50;
 // recomputes once per block. Priced from that work, not from the opcode.
 pub const KEYED_SLOT_METER: u64 = 20_000;
 
+// The chain reads an event under this selector back as an asset mint, which writes a
+// balance leaf, so the meter has to price it the same as any other fresh leaf.
+pub const ASSET_MINT_SELECTOR: [u8; 4] = *b"MINT";
+pub const ASSET_MINT_DATA_BYTES: usize = 40;
+
 // What a contract may dirty before each further leaf is priced as fresh state.
 pub const FREE_DIRTY_SLOTS: usize = 8;
 

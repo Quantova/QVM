@@ -130,7 +130,7 @@ pub struct Interpreter<'a> {
     effects: Vec<Effect>,
     effects_bytes: u64,
     keyed_bytes: u64,
-    sent_to: BTreeSet<Vec<u8>>,
+    durable_targets: BTreeSet<Vec<u8>>,
     manifest: Option<Manifest>,
     keyed_authorized_reads: BTreeSet<StorageKey>,
     keyed_authorized_writes: BTreeSet<StorageKey>,
@@ -151,7 +151,7 @@ impl<'a> Interpreter<'a> {
             effects: Vec::new(),
             effects_bytes: 0,
             keyed_bytes: 0,
-            sent_to: BTreeSet::new(),
+            durable_targets: BTreeSet::new(),
             manifest: None,
             keyed_authorized_reads: BTreeSet::new(),
             keyed_authorized_writes: BTreeSet::new(),
@@ -315,6 +315,15 @@ impl<'a> Interpreter<'a> {
     // first eight bytes of the hash preimage, written big endian by the code generator, and the machine
     // derives the key itself here, so a program cannot authorise a key outside a declared map. A declared
     // write base also grants read, matching the scalar rule that a declared write may be read.
+    // One set across every opcode that can mint a durable leaf, so the same target cannot
+    // be bought once per opcode. The first is the ordinary single recipient case.
+    fn charge_durable_target(&mut self, target: &[u8]) -> Result<(), Fault> {
+        if self.durable_targets.insert(target.to_vec()) && self.durable_targets.len() > 1 {
+            self.charge(crate::meter::KEYED_SLOT_METER)?;
+        }
+        Ok(())
+    }
+
     fn charge_keyed(&mut self) -> Result<(), Fault> {
         self.charge(crate::meter::KEYED_SLOT_METER)?;
         let retained = self
@@ -599,11 +608,7 @@ impl<'a> Interpreter<'a> {
                     .ok_or(Fault::BadMemory)?
                     .to_vec();
                 self.charge_effect(to.len())?;
-                // Each further distinct recipient may be a fresh account leaf, which costs
-                // the same block work as a fresh keyed slot.
-                if self.sent_to.insert(to.clone()) && self.sent_to.len() > 1 {
-                    self.charge(crate::meter::KEYED_SLOT_METER)?;
-                }
+                self.charge_durable_target(&to)?;
                 self.effects.push(Effect::Transfer { to, amount });
             }
 
@@ -614,6 +619,14 @@ impl<'a> Interpreter<'a> {
                     .ok_or(Fault::BadMemory)?
                     .to_vec();
                 self.charge_effect(data.len())?;
+                // The chain reads this selector back as an asset mint and writes a balance
+                // leaf per holder, so it is priced here like any other fresh leaf.
+                if selector == crate::meter::ASSET_MINT_SELECTOR
+                    && data.len() >= crate::meter::ASSET_MINT_DATA_BYTES
+                {
+                    let holder = data[..32].to_vec();
+                    self.charge_durable_target(&holder)?;
+                }
                 self.effects.push(Effect::Event { selector, data });
             }
 
@@ -2060,6 +2073,49 @@ mod fresh_account_pricing_tests {
             out.meter_used
         );
         assert_eq!(out.effects.len(), 2);
+    }
+
+    // The chain turns this event into an asset balance leaf, so it is priced like one.
+    #[test]
+    fn a_minted_holder_past_the_first_pays_a_fresh_leaf() {
+        let mut memory = Vec::new();
+        memory.extend_from_slice(&[3u8; 40]);
+        memory.extend_from_slice(&[4u8; 40]);
+        let sel = u64::from(u32::from_be_bytes(crate::meter::ASSET_MINT_SELECTOR));
+        let code = assemble(&format!(
+            "LDI r0, 0\nLDI r1, 40\nLDI r2, {sel}\nEMIT r0, r1, r2\n             LDI r0, 40\nEMIT r0, r1, r2\nHALT"
+        ))
+        .expect("assemble");
+        let out = Interpreter::new(&code, &[], crate::meter::KEYED_SLOT_METER + 2_000)
+            .with_memory(&memory)
+            .run()
+            .expect("halt");
+        assert!(
+            out.meter_used > crate::meter::KEYED_SLOT_METER,
+            "the second minted holder did not pay for its leaf, paid {}",
+            out.meter_used
+        );
+    }
+
+    // A mint and a transfer to one target are one leaf, so they share the charge.
+    #[test]
+    fn a_mint_and_a_send_to_one_target_share_the_durable_budget() {
+        let mut memory = [0u8; 40];
+        memory[..32].copy_from_slice(&[5u8; 32]);
+        let sel = u64::from(u32::from_be_bytes(crate::meter::ASSET_MINT_SELECTOR));
+        let code = assemble(&format!(
+            "LDI r0, 0\nLDI r1, 40\nLDI r2, {sel}\nEMIT r0, r1, r2\n             LDI r1, 32\nLDI r2, 7\nSEND r0, r1, r2\nHALT"
+        ))
+        .expect("assemble");
+        let out = Interpreter::new(&code, &[], 2_000)
+            .with_memory(&memory)
+            .run()
+            .expect("halt");
+        assert!(
+            out.meter_used < crate::meter::KEYED_SLOT_METER,
+            "one target was charged twice, paid {}",
+            out.meter_used
+        );
     }
 
     // Repaying one recipient is one leaf, so it is charged once.
