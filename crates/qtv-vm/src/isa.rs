@@ -865,8 +865,22 @@ mod decoder_hostile_input_tests {
             | Instr::Eq { d, a, b }
             | Instr::LtU { d, a, b }
             | Instr::GtU { d, a, b } => vec![d, a, b],
-            Instr::DivW { dlo, dhi, alo, ahi, blo, bhi }
-            | Instr::RemW { dlo, dhi, alo, ahi, blo, bhi } => vec![dlo, dhi, alo, ahi, blo, bhi],
+            Instr::DivW {
+                dlo,
+                dhi,
+                alo,
+                ahi,
+                blo,
+                bhi,
+            }
+            | Instr::RemW {
+                dlo,
+                dhi,
+                alo,
+                ahi,
+                blo,
+                bhi,
+            } => vec![dlo, dhi, alo, ahi, blo, bhi],
             Instr::Push { a } => vec![a],
             Instr::MStore { a, b } => vec![a, b],
             Instr::Jmp { .. } | Instr::Call { .. } => vec![],

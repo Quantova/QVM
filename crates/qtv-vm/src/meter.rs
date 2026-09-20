@@ -21,6 +21,9 @@ pub const MERKLE_LEVEL: u64 = 50;
 // recomputes once per block. Priced from that work, not from the opcode.
 pub const KEYED_SLOT_METER: u64 = 20_000;
 
+// What a contract may dirty before each further leaf is priced as fresh state.
+pub const FREE_DIRTY_SLOTS: usize = 8;
+
 pub const VERIFY_MESSAGE_BLOCK: u64 = 6;
 
 fn keccak_blocks(len: u64) -> u64 {
@@ -117,8 +120,22 @@ mod tests {
             Instr::SubW { d: 0, a: 0, b: 0 },
             Instr::MulW { d: 0, a: 0, b: 0 },
             Instr::MulHi { d: 0, a: 0, b: 0 },
-            Instr::DivW { dlo: 0, dhi: 0, alo: 0, ahi: 0, blo: 0, bhi: 0 },
-            Instr::RemW { dlo: 0, dhi: 0, alo: 0, ahi: 0, blo: 0, bhi: 0 },
+            Instr::DivW {
+                dlo: 0,
+                dhi: 0,
+                alo: 0,
+                ahi: 0,
+                blo: 0,
+                bhi: 0,
+            },
+            Instr::RemW {
+                dlo: 0,
+                dhi: 0,
+                alo: 0,
+                ahi: 0,
+                blo: 0,
+                bhi: 0,
+            },
             Instr::And { d: 0, a: 0, b: 0 },
             Instr::Or { d: 0, a: 0, b: 0 },
             Instr::Xor { d: 0, a: 0, b: 0 },

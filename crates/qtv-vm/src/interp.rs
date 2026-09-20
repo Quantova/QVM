@@ -130,6 +130,7 @@ pub struct Interpreter<'a> {
     effects: Vec<Effect>,
     effects_bytes: u64,
     keyed_bytes: u64,
+    sent_to: BTreeSet<Vec<u8>>,
     manifest: Option<Manifest>,
     keyed_authorized_reads: BTreeSet<StorageKey>,
     keyed_authorized_writes: BTreeSet<StorageKey>,
@@ -150,6 +151,7 @@ impl<'a> Interpreter<'a> {
             effects: Vec::new(),
             effects_bytes: 0,
             keyed_bytes: 0,
+            sent_to: BTreeSet::new(),
             manifest: None,
             keyed_authorized_reads: BTreeSet::new(),
             keyed_authorized_writes: BTreeSet::new(),
@@ -582,8 +584,12 @@ impl<'a> Interpreter<'a> {
                         return Err(Fault::UndeclaredSlot);
                     }
                 }
+                // Each distinct slot dirtied past the free allowance is another state trie
+                // leaf the node roots this block, priced like a fresh keyed slot.
+                if self.dirty.insert(key) && self.dirty.len() > crate::meter::FREE_DIRTY_SLOTS {
+                    self.charge(crate::meter::KEYED_SLOT_METER)?;
+                }
                 self.storage.insert(key, val);
-                self.dirty.insert(key);
             }
 
             Instr::Send { a, b, c } => {
@@ -593,6 +599,11 @@ impl<'a> Interpreter<'a> {
                     .ok_or(Fault::BadMemory)?
                     .to_vec();
                 self.charge_effect(to.len())?;
+                // Each further distinct recipient may be a fresh account leaf, which costs
+                // the same block work as a fresh keyed slot.
+                if self.sent_to.insert(to.clone()) && self.sent_to.len() > 1 {
+                    self.charge(crate::meter::KEYED_SLOT_METER)?;
+                }
                 self.effects.push(Effect::Transfer { to, amount });
             }
 
@@ -2004,6 +2015,77 @@ mod tests {
         let code = program(&[Instr::Ldi { d: 0, imm: 7 }, Instr::Halt]);
         let out = Interpreter::new(&code, &[], 100).run().expect("halt");
         assert_eq!(out.regs[0], 7);
+    }
+}
+
+#[cfg(test)]
+mod fresh_account_pricing_tests {
+    use super::*;
+    use crate::asm::assemble;
+
+    // One send is a plain transfer and stays at the transfer price.
+    #[test]
+    fn a_single_recipient_is_not_charged_a_fresh_leaf() {
+        let account = [9u8; 32];
+        let code =
+            assemble("LDI r0, 0\nLDI r1, 32\nLDI r2, 5\nSEND r0, r1, r2\nHALT").expect("assemble");
+        let out = Interpreter::new(&code, &[], 1_000)
+            .with_memory(&account)
+            .run()
+            .expect("halt");
+        assert!(
+            out.meter_used < crate::meter::KEYED_SLOT_METER,
+            "a plain transfer must not pay a fresh leaf, paid {}",
+            out.meter_used
+        );
+    }
+
+    // Two distinct recipients are two leaves, so the second is priced.
+    #[test]
+    fn a_second_distinct_recipient_pays_a_fresh_leaf() {
+        let mut memory = Vec::new();
+        memory.extend_from_slice(&[9u8; 32]);
+        memory.extend_from_slice(&[11u8; 32]);
+        let code = assemble(
+            "LDI r0, 0\nLDI r1, 32\nLDI r2, 5\nSEND r0, r1, r2\n             LDI r0, 32\nSEND r0, r1, r2\nHALT",
+        )
+        .expect("assemble");
+        let out = Interpreter::new(&code, &[], crate::meter::KEYED_SLOT_METER + 1_000)
+            .with_memory(&memory)
+            .run()
+            .expect("halt");
+        assert!(
+            out.meter_used > crate::meter::KEYED_SLOT_METER,
+            "the second recipient did not pay for its leaf, paid {}",
+            out.meter_used
+        );
+        assert_eq!(out.effects.len(), 2);
+    }
+
+    // Repaying one recipient is one leaf, so it is charged once.
+    #[test]
+    fn repaying_the_same_recipient_is_charged_once() {
+        let account = [9u8; 32];
+        let code =
+            assemble("LDI r0, 0\nLDI r1, 32\nLDI r2, 5\nSEND r0, r1, r2\nSEND r0, r1, r2\nHALT")
+                .expect("assemble");
+        let out = Interpreter::new(&code, &[], 1_000)
+            .with_memory(&account)
+            .run()
+            .expect("halt");
+        assert_eq!(out.effects.len(), 2, "both transfers were recorded");
+    }
+
+    // The meter, not the effects cap, is what bounds fresh account leaves per transaction.
+    #[test]
+    fn one_transaction_cannot_buy_more_fresh_accounts_than_the_meter_pays_for() {
+        let max_tx_meter = 50_000_000u64 / 4;
+        let by_meter = max_tx_meter / crate::meter::KEYED_SLOT_METER + 1;
+        let by_effects = crate::meter::EFFECTS_BYTES_CAP / 32;
+        assert!(
+            by_meter < by_effects,
+            "the meter must bind before the effects cap, meter {by_meter} effects {by_effects}"
+        );
     }
 }
 
