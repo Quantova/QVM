@@ -314,6 +314,7 @@ impl<'a> Interpreter<'a> {
     // derives the key itself here, so a program cannot authorise a key outside a declared map. A declared
     // write base also grants read, matching the scalar rule that a declared write may be read.
     fn charge_keyed(&mut self) -> Result<(), Fault> {
+        self.charge(crate::meter::KEYED_SLOT_METER)?;
         let retained = self
             .keyed_bytes
             .checked_add(STORAGE_KEY_BYTES as u64)
@@ -2003,5 +2004,80 @@ mod tests {
         let code = program(&[Instr::Ldi { d: 0, imm: 7 }, Instr::Halt]);
         let out = Interpreter::new(&code, &[], 100).run().expect("halt");
         assert_eq!(out.regs[0], 7);
+    }
+}
+
+#[cfg(test)]
+mod keyed_slot_pricing_tests {
+    use super::*;
+    use crate::asm::assemble;
+    use crate::container::{selector, Container, Entry, StateAccess};
+
+    // A distinct keyed slot becomes a permanent leaf in the state trie, and the node
+    // recomputes that root synchronously once per block. The meter has to price that work
+    // or one ordinary call buys enough leaves to stall every validator past the view
+    // timeout.
+    const MAX_TX_METER: u64 = 12_500_000;
+    const BLOCK_METER_BUDGET: u64 = 50_000_000;
+
+    fn slot_flood(limit: u64) -> Result<Outcome, Fault> {
+        let base: u64 = 1 << 40;
+        let code = assemble(
+            "LDI r0, 0\nLDI r1, 16\nLDI r2, 64\nLDI r3, 0\nLDI r4, 1\nLDI r5, 8\nLDI r6, 40000\nloop:\nMSTORE r5, r3\nHASH r0, r1, r2\nADDW r3, r3, r4\nLTU r7, r3, r6\nJNZ r7, loop\nHALT",
+        )
+        .expect("assemble");
+        let sel = selector("credit()");
+        let container = Container::new(
+            code,
+            vec![],
+            vec![Entry {
+                selector: sel,
+                offset: 0,
+                access: StateAccess {
+                    keyed_writes: vec![base],
+                    ..Default::default()
+                },
+            }],
+        );
+        Interpreter::for_entry(&container, sel, limit)
+            .expect("entry")
+            .with_memory(&base.to_be_bytes())
+            .run()
+    }
+
+    #[test]
+    fn one_transaction_cannot_buy_more_keyed_slots_than_the_meter_pays_for() {
+        let outcome = slot_flood(MAX_TX_METER);
+        assert_eq!(
+            outcome,
+            Err(Fault::OutOfMeter),
+            "a keyed slot flood must exhaust the meter rather than the byte cap, or the slots \
+             are cheaper than the state work they force"
+        );
+
+        let ceiling = MAX_TX_METER / crate::meter::KEYED_SLOT_METER;
+        assert!(
+            ceiling <= 1_000,
+            "one transaction can still authorise {ceiling} fresh keyed slots, which is more \
+             permanent state than a single call should be able to buy"
+        );
+    }
+
+    #[test]
+    fn a_whole_block_of_keyed_slots_stays_within_reach_of_the_root_recompute() {
+        let per_block = BLOCK_METER_BUDGET / crate::meter::KEYED_SLOT_METER;
+        assert!(
+            per_block <= 4_000,
+            "a full block can authorise {per_block} fresh keyed slots, and the state root over \
+             that many new leaves does not finish inside the block interval"
+        );
+    }
+
+    #[test]
+    fn a_keyed_slot_costs_more_than_the_opcode_that_writes_it() {
+        assert!(
+            crate::meter::KEYED_SLOT_METER > crate::meter::cost(crate::isa::OpCode::SStore) * 20,
+            "the slot itself must dominate the store opcode, the permanent leaf is the cost"
+        );
     }
 }

@@ -13,9 +13,13 @@ pub const EFFECT_RECORD_OVERHEAD: u64 = 32;
 
 pub const KECCAK_RATE: u64 = 136;
 
-pub const HASH_BLOCK: u64 = 6;
+pub const HASH_BLOCK: u64 = 40;
 
-pub const MERKLE_LEVEL: u64 = 8;
+pub const MERKLE_LEVEL: u64 = 50;
+
+// A distinct keyed slot forces a fresh leaf in the state trie, whose root the node
+// recomputes once per block. Priced from that work, not from the opcode.
+pub const KEYED_SLOT_METER: u64 = 20_000;
 
 pub const VERIFY_MESSAGE_BLOCK: u64 = 6;
 
@@ -83,12 +87,12 @@ pub fn cost(op: OpCode) -> u64 {
         OpCode::Send => 200,
         OpCode::Emit => 200,
 
-        OpCode::Hash => 32,
+        OpCode::Hash => 200,
         OpCode::VerifyMl => 8000,
         OpCode::VerifySlh => 160000,
         OpCode::MerkleVerify => 512,
         OpCode::Kem => 3200,
-        OpCode::Addr => 64,
+        OpCode::Addr => 4_000,
     }
 }
 
@@ -149,10 +153,7 @@ mod tests {
         .collect()
     }
 
-    // An exhaustive match with no wildcard. Adding an instruction to the ISA without
-    // adding it to every_opcode above stops this compiling, which is the point. The
-    // free instruction check is only as good as the list it walks, and that list was
-    // already missing the wide divide and remainder.
+    // No wildcard, so a new instruction stops this compiling.
     fn is_listed(instr: &Instr) -> bool {
         let name = match instr {
             Instr::Halt => "Halt",
