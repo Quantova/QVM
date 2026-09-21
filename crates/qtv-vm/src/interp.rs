@@ -39,6 +39,9 @@ pub enum Effect {
     },
 }
 
+pub const DURABLE_TRANSFER: u8 = 0;
+const DURABLE_MINT: u8 = 1;
+
 pub const STORAGE_KEY_BYTES: usize = 32;
 
 pub type StorageKey = [u8; STORAGE_KEY_BYTES];
@@ -319,8 +322,14 @@ impl<'a> Interpreter<'a> {
     // write base also grants read, matching the scalar rule that a declared write may be read.
     // One set across every opcode that can mint a durable leaf, so the same target cannot
     // be bought once per opcode. The first is the ordinary single recipient case.
-    fn charge_durable_target(&mut self, target: &[u8]) -> Result<(), Fault> {
-        if self.durable_targets.insert(target.to_vec()) && self.durable_targets.len() > 1 {
+    fn charge_durable_target(&mut self, kind: u8, target: &[u8]) -> Result<(), Fault> {
+        // Keyed by KIND as well as bytes. A transfer to an id and a mint to the same id
+        // are two different leaves downstream, an account balance and an asset balance,
+        // so one entry would pay once for two of them.
+        let mut key = Vec::with_capacity(target.len() + 1);
+        key.push(kind);
+        key.extend_from_slice(target);
+        if self.durable_targets.insert(key) && self.durable_targets.len() > 1 {
             self.charge(crate::meter::KEYED_SLOT_METER)?;
         }
         Ok(())
@@ -610,7 +619,7 @@ impl<'a> Interpreter<'a> {
                     .ok_or(Fault::BadMemory)?
                     .to_vec();
                 self.charge_effect(to.len())?;
-                self.charge_durable_target(&to)?;
+                self.charge_durable_target(DURABLE_TRANSFER, &to)?;
                 self.effects.push(Effect::Transfer { to, amount });
             }
 
@@ -633,7 +642,7 @@ impl<'a> Interpreter<'a> {
                     && data.len() >= crate::meter::ASSET_MINT_DATA_BYTES
                 {
                     let holder = data[..32].to_vec();
-                    self.charge_durable_target(&holder)?;
+                    self.charge_durable_target(DURABLE_MINT, &holder)?;
                 }
                 // A record is durable whatever its length, so the bytes alone do not
                 // price it. The allowance keeps an ordinary contract unaffected.
@@ -2112,23 +2121,25 @@ mod fresh_account_pricing_tests {
         );
     }
 
-    // A mint and a transfer to one target are one leaf, so they share the charge.
+    // A transfer to an id and a mint to the same id are two different leaves, an account
+    // balance and an asset balance, so one of them must not pay for both.
     #[test]
-    fn a_mint_and_a_send_to_one_target_share_the_durable_budget() {
+    fn a_send_and_a_mint_to_one_id_each_pay_for_their_own_leaf() {
         let mut memory = [0u8; 40];
         memory[..32].copy_from_slice(&[5u8; 32]);
         let sel = u64::from(u32::from_be_bytes(crate::meter::ASSET_MINT_SELECTOR));
         let code = assemble(&format!(
-            "LDI r0, 0\nLDI r1, 40\nLDI r2, {sel}\nEMIT r0, r1, r2\n             LDI r1, 32\nLDI r2, 7\nSEND r0, r1, r2\nHALT"
+            "LDI r0, 0\nLDI r1, 32\nLDI r2, 7\nSEND r0, r1, r2\n\
+             LDI r1, 40\nLDI r2, {sel}\nEMIT r0, r1, r2\nHALT"
         ))
         .expect("assemble");
-        let out = Interpreter::new(&code, &[], crate::meter::KEYED_SLOT_METER)
+        let out = Interpreter::new(&code, &[], crate::meter::KEYED_SLOT_METER * 3)
             .with_memory(&memory)
             .run()
             .expect("halt");
         assert!(
-            out.meter_used < crate::meter::KEYED_SLOT_METER,
-            "one target was charged twice, paid {}",
+            out.meter_used > crate::meter::KEYED_SLOT_METER,
+            "the mint rode free on the transfer's charge, paid {}",
             out.meter_used
         );
     }
