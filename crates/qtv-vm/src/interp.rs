@@ -621,6 +621,12 @@ impl<'a> Interpreter<'a> {
                     .ok_or(Fault::BadMemory)?
                     .to_vec();
                 self.charge_effect(data.len())?;
+                // The record is appended to a log nothing prunes, so its bytes cost what
+                // permanent contract code costs, not what an ephemeral effect costs.
+                let durable = (data.len() as u64)
+                    .checked_mul(crate::meter::EVENT_BYTE - crate::meter::EFFECT_BYTE)
+                    .ok_or(Fault::EffectsTooLarge)?;
+                self.charge(durable)?;
                 // The chain reads this selector back as an asset mint and writes a balance
                 // leaf per holder, so it is priced here like any other fresh leaf.
                 if selector == crate::meter::ASSET_MINT_SELECTOR
@@ -1282,7 +1288,7 @@ mod tests {
             "LDI r0, 0\nLDI r1, 16\nLDI r2, {selector}\nEMIT r0, r1, r2\nHALT"
         ))
         .expect("assemble");
-        let out = Interpreter::new(&code, &[], 1000)
+        let out = Interpreter::new(&code, &[], 20_000)
             .with_memory(&payload)
             .run()
             .expect("halt");
@@ -1328,7 +1334,7 @@ mod tests {
             out.meter_used,
             3 * crate::meter::cost(OpCode::Ldi)
                 + crate::meter::cost(OpCode::Emit)
-                + 64 * crate::meter::EFFECT_BYTE
+                + 64 * crate::meter::EVENT_BYTE
                 + crate::meter::cost(OpCode::Halt)
         );
     }
@@ -2095,7 +2101,7 @@ mod fresh_account_pricing_tests {
             "LDI r0, 0\nLDI r1, 40\nLDI r2, {sel}\nEMIT r0, r1, r2\n             LDI r0, 40\nEMIT r0, r1, r2\nHALT"
         ))
         .expect("assemble");
-        let out = Interpreter::new(&code, &[], crate::meter::KEYED_SLOT_METER + 2_000)
+        let out = Interpreter::new(&code, &[], crate::meter::KEYED_SLOT_METER * 2)
             .with_memory(&memory)
             .run()
             .expect("halt");
@@ -2116,7 +2122,7 @@ mod fresh_account_pricing_tests {
             "LDI r0, 0\nLDI r1, 40\nLDI r2, {sel}\nEMIT r0, r1, r2\n             LDI r1, 32\nLDI r2, 7\nSEND r0, r1, r2\nHALT"
         ))
         .expect("assemble");
-        let out = Interpreter::new(&code, &[], 2_000)
+        let out = Interpreter::new(&code, &[], crate::meter::KEYED_SLOT_METER)
             .with_memory(&memory)
             .run()
             .expect("halt");

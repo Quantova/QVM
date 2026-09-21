@@ -7,6 +7,12 @@ pub const DISPATCH: u64 = 4;
 
 pub const EFFECT_BYTE: u64 = 2;
 
+// An event record is written to the append only event store and never pruned, so its
+// bytes are as durable as contract code and cost the same. A transfer recipient is not
+// durable log, so it stays on EFFECT_BYTE above. At 2 a byte one block wrote 24 MB of
+// permanent log against a 1 MB ceiling on permanent code.
+pub const EVENT_BYTE: u64 = 100;
+
 pub const EFFECTS_BYTES_CAP: u64 = 1 << 20;
 
 pub const EFFECT_RECORD_OVERHEAD: u64 = 32;
@@ -161,6 +167,17 @@ mod budget_tests {
                 "{name} charges {charged} for {owed} of measured work"
             );
         }
+    }
+
+    // Durable event bytes are as permanent as contract code, so they cost the same.
+    #[test]
+    fn a_durable_event_byte_costs_what_a_code_byte_costs() {
+        const DEPLOY_BYTE_METER: u64 = 100;
+        assert!(
+            EVENT_BYTE >= DEPLOY_BYTE_METER,
+            "an event byte at {EVENT_BYTE} against a code byte at {DEPLOY_BYTE_METER}, so a \
+             block buys more permanent log than it can buy permanent code"
+        );
     }
 
     // Event records are durable, so a block of them has to stay bounded too.
