@@ -28,6 +28,14 @@ pub const KEYED_SLOT_METER: u64 = 227_000;
 pub const LEAF_ROOT_BUDGET_MS: u64 = 200;
 pub const LEAF_ROOT_MICROS: u64 = 900;
 
+// Measured microseconds of real CPU per crypto opcode, and the meter per microsecond the
+// arithmetic column is calibrated at. The prices above are derived from these, and the
+// budget test is what keeps them in step rather than a comment.
+pub const METER_PER_MICRO: u64 = 79;
+pub const VERIFY_ML_MICROS: u64 = 288;
+pub const VERIFY_SLH_MICROS: u64 = 4_245;
+pub const KEM_MICROS: u64 = 255;
+
 // A durable event record is written to the append only event store and held in the node's
 // event cache, and its root is recomputed per block. The bytes alone do not price it.
 pub const EVENT_RECORD_METER: u64 = 6_250;
@@ -43,7 +51,9 @@ pub const ASSET_MINT_DATA_BYTES: usize = 40;
 // What a contract may dirty before each further leaf is priced as fresh state.
 pub const FREE_DIRTY_SLOTS: usize = 8;
 
-pub const VERIFY_MESSAGE_BLOCK: u64 = 6;
+// One keccak permutation of work, same as HASH_BLOCK. The message tail of a verify is
+// hashed exactly like any other bytes, so it is priced the same.
+pub const VERIFY_MESSAGE_BLOCK: u64 = 40;
 
 fn keccak_blocks(len: u64) -> u64 {
     len / KECCAK_RATE + 1
@@ -110,10 +120,10 @@ pub fn cost(op: OpCode) -> u64 {
         OpCode::Emit => 200,
 
         OpCode::Hash => 200,
-        OpCode::VerifyMl => 8000,
-        OpCode::VerifySlh => 160000,
+        OpCode::VerifyMl => 60_000,
+        OpCode::VerifySlh => 340_000,
         OpCode::MerkleVerify => 512,
-        OpCode::Kem => 3200,
+        OpCode::Kem => 21_000,
         OpCode::Addr => 4_000,
     }
 }
@@ -134,6 +144,23 @@ mod budget_tests {
             micros <= LEAF_ROOT_BUDGET_MS * 1_000,
             "{leaves} fresh leaves root in {micros} us, past the {LEAF_ROOT_BUDGET_MS} ms budget"
         );
+    }
+
+    // A crypto opcode that costs more CPU than it charges lets a contract inflate the
+    // real time of a block past what the budget says it bought.
+    #[test]
+    fn the_crypto_opcodes_charge_at_least_the_cpu_they_burn() {
+        for (name, charged, micros) in [
+            ("VerifyMl", cost(OpCode::VerifyMl), VERIFY_ML_MICROS),
+            ("VerifySlh", cost(OpCode::VerifySlh), VERIFY_SLH_MICROS),
+            ("Kem", cost(OpCode::Kem), KEM_MICROS),
+        ] {
+            let owed = micros * METER_PER_MICRO;
+            assert!(
+                charged >= owed,
+                "{name} charges {charged} for {owed} of measured work"
+            );
+        }
     }
 
     // Event records are durable, so a block of them has to stay bounded too.

@@ -1496,7 +1496,8 @@ mod tests {
             mnemonic
         );
         let code = assemble(&src).expect("assemble");
-        let out = Interpreter::new(&code, &[], 200_000)
+        // Generous against the repriced crypto opcodes, which are derived from measured CPU.
+        let out = Interpreter::new(&code, &[], crate::meter::cost(OpCode::VerifySlh) * 4)
             .with_memory(region)
             .run()
             .expect("halt");
