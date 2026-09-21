@@ -131,6 +131,7 @@ pub struct Interpreter<'a> {
     effects_bytes: u64,
     keyed_bytes: u64,
     durable_targets: BTreeSet<Vec<u8>>,
+    event_records: usize,
     manifest: Option<Manifest>,
     keyed_authorized_reads: BTreeSet<StorageKey>,
     keyed_authorized_writes: BTreeSet<StorageKey>,
@@ -152,6 +153,7 @@ impl<'a> Interpreter<'a> {
             effects_bytes: 0,
             keyed_bytes: 0,
             durable_targets: BTreeSet::new(),
+            event_records: 0,
             manifest: None,
             keyed_authorized_reads: BTreeSet::new(),
             keyed_authorized_writes: BTreeSet::new(),
@@ -626,6 +628,12 @@ impl<'a> Interpreter<'a> {
                 {
                     let holder = data[..32].to_vec();
                     self.charge_durable_target(&holder)?;
+                }
+                // A record is durable whatever its length, so the bytes alone do not
+                // price it. The allowance keeps an ordinary contract unaffected.
+                self.event_records += 1;
+                if self.event_records > crate::meter::FREE_EVENT_RECORDS {
+                    self.charge(crate::meter::EVENT_RECORD_METER)?;
                 }
                 self.effects.push(Effect::Event { selector, data });
             }
@@ -1669,7 +1677,7 @@ mod tests {
                 },
             }],
         );
-        let out = Interpreter::for_entry(&container, sel, 50_000)
+        let out = Interpreter::for_entry(&container, sel, crate::meter::KEYED_SLOT_METER * 4)
             .expect("entry")
             .with_memory(&mem)
             .run()
@@ -1747,7 +1755,7 @@ mod tests {
                 },
             }],
         );
-        let out = Interpreter::for_entry(&container, sel, 50_000)
+        let out = Interpreter::for_entry(&container, sel, crate::meter::KEYED_SLOT_METER * 4)
             .expect("entry")
             .with_memory(&mem)
             .run()

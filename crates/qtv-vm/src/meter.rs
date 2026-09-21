@@ -18,8 +18,22 @@ pub const HASH_BLOCK: u64 = 40;
 pub const MERKLE_LEVEL: u64 = 50;
 
 // A distinct keyed slot forces a fresh leaf in the state trie, whose root the node
-// recomputes once per block. Priced from that work, not from the opcode.
-pub const KEYED_SLOT_METER: u64 = 20_000;
+// recomputes once per block. Priced from that work, not from the opcode. One fresh leaf
+// measures about 0.9 ms of root recompute on a million leaf trie, so the block budget
+// divided by this has to stay inside a fraction of the block interval.
+pub const KEYED_SLOT_METER: u64 = 227_000;
+
+// What one whole block of fresh leaves may cost in root recompute. The price above is
+// derived from it, and this assert is what keeps the two in step.
+pub const LEAF_ROOT_BUDGET_MS: u64 = 200;
+pub const LEAF_ROOT_MICROS: u64 = 900;
+
+// A durable event record is written to the append only event store and held in the node's
+// event cache, and its root is recomputed per block. The bytes alone do not price it.
+pub const EVENT_RECORD_METER: u64 = 6_250;
+
+// What a contract may emit before each further record is priced as durable state.
+pub const FREE_EVENT_RECORDS: usize = 4;
 
 // The chain reads an event under this selector back as an asset mint, which writes a
 // balance leaf, so the meter has to price it the same as any other fresh leaf.
@@ -101,6 +115,35 @@ pub fn cost(op: OpCode) -> u64 {
         OpCode::MerkleVerify => 512,
         OpCode::Kem => 3200,
         OpCode::Addr => 4_000,
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    const BLOCK_METER_BUDGET: u64 = 50_000_000;
+
+    // The leaf price only means something if a whole block of leaves still roots inside
+    // the interval. If the measured cost moves, this is what fails rather than the chain.
+    #[test]
+    fn a_full_block_of_fresh_leaves_roots_inside_its_budget() {
+        let leaves = BLOCK_METER_BUDGET / KEYED_SLOT_METER;
+        let micros = leaves * LEAF_ROOT_MICROS;
+        assert!(
+            micros <= LEAF_ROOT_BUDGET_MS * 1_000,
+            "{leaves} fresh leaves root in {micros} us, past the {LEAF_ROOT_BUDGET_MS} ms budget"
+        );
+    }
+
+    // Event records are durable, so a block of them has to stay bounded too.
+    #[test]
+    fn a_full_block_of_event_records_stays_bounded() {
+        let records = BLOCK_METER_BUDGET / EVENT_RECORD_METER;
+        assert!(
+            records <= 8_192,
+            "one block buys {records} durable event records"
+        );
     }
 }
 
