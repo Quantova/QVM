@@ -51,15 +51,7 @@ pub struct Outcome {
     pub regs: [u64; NUM_REGS],
     pub meter_used: u64,
     pub storage: BTreeMap<StorageKey, u64>,
-    /// Slots this execution actually wrote. A caller that stores each slot
-    /// separately writes back only these, instead of rewriting every slot the
-    /// contract owns to change one of them.
     pub dirty: BTreeSet<StorageKey>,
-    /// How many slots this execution had to FETCH through the loader. Separating
-    /// reads from writes stopped a read looking like a write, but it also took reads
-    /// out of the caller's per slot charge, which made walking an unbounded keyspace
-    /// free. A read costs the node a trie lookup exactly like a write does, so the
-    /// count has to leave the machine for the charge to see it.
     pub fetched: usize,
     pub effects: Vec<Effect>,
 }
@@ -123,11 +115,7 @@ pub struct Interpreter<'a> {
     meter_limit: u64,
     meter_used: u64,
     storage: BTreeMap<StorageKey, u64>,
-    /// Fetches a slot the cache has not seen. Without one the cache is the whole
-    /// world, which is the old behaviour and what the tests rely on.
     loader: Option<&'a dyn Fn(&StorageKey) -> u64>,
-    /// Slots fetched through the loader. Kept apart from `storage` so a read never
-    /// looks like a write in the outcome.
     loaded: BTreeMap<StorageKey, u64>,
     dirty: BTreeSet<StorageKey>,
     effects: Vec<Effect>,
@@ -225,8 +213,6 @@ impl<'a> Interpreter<'a> {
         self
     }
 
-    /// Read slots on demand rather than being handed every slot up front. This is
-    /// what lets a contract hold more state than a single call could afford to load.
     pub fn with_storage_loader(mut self, loader: &'a dyn Fn(&StorageKey) -> u64) -> Self {
         self.loader = Some(loader);
         self
@@ -314,18 +300,7 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    // Keyed storage authorisation. A keyed slot lives at sha3 of a map base and a runtime key, which
-    // cannot be listed as an exact slot, so an entry declares the base and the machine authorises any
-    // key it derives from a declared base, that map's whole keyspace and nothing else. The base is the
-    // first eight bytes of the hash preimage, written big endian by the code generator, and the machine
-    // derives the key itself here, so a program cannot authorise a key outside a declared map. A declared
-    // write base also grants read, matching the scalar rule that a declared write may be read.
-    // One set across every opcode that can mint a durable leaf, so the same target cannot
-    // be bought once per opcode. The first is the ordinary single recipient case.
     fn charge_durable_target(&mut self, kind: u8, target: &[u8]) -> Result<(), Fault> {
-        // Keyed by KIND as well as bytes. A transfer to an id and a mint to the same id
-        // are two different leaves downstream, an account balance and an asset balance,
-        // so one entry would pay once for two of them.
         let mut key = Vec::with_capacity(target.len() + 1);
         key.push(kind);
         key.extend_from_slice(target);
@@ -574,12 +549,6 @@ impl<'a> Interpreter<'a> {
                         return Err(Fault::UndeclaredSlot);
                     }
                 }
-                // A read must stay a read. Caching a fetched slot into `storage`
-                // made every key merely READ appear in the outcome alongside the keys
-                // written, so a caller that persists the outcome would write back
-                // slots the entry never touched. Fetched values live in their own
-                // cache, and with no loader the miss is definitionally zero and
-                // nothing is recorded at all, exactly as before.
                 let v = match self.storage.get(&key) {
                     Some(v) => *v,
                     None => match self.loaded.get(&key) {
@@ -604,8 +573,6 @@ impl<'a> Interpreter<'a> {
                         return Err(Fault::UndeclaredSlot);
                     }
                 }
-                // Each distinct slot dirtied past the free allowance is another state trie
-                // leaf the node roots this block, priced like a fresh keyed slot.
                 if self.dirty.insert(key) && self.dirty.len() > crate::meter::FREE_DIRTY_SLOTS {
                     self.charge(crate::meter::KEYED_SLOT_METER)?;
                 }
@@ -630,22 +597,16 @@ impl<'a> Interpreter<'a> {
                     .ok_or(Fault::BadMemory)?
                     .to_vec();
                 self.charge_effect(data.len())?;
-                // The record is appended to a log nothing prunes, so its bytes cost what
-                // permanent contract code costs, not what an ephemeral effect costs.
                 let durable = (data.len() as u64)
                     .checked_mul(crate::meter::EVENT_BYTE - crate::meter::EFFECT_BYTE)
                     .ok_or(Fault::EffectsTooLarge)?;
                 self.charge(durable)?;
-                // The chain reads this selector back as an asset mint and writes a balance
-                // leaf per holder, so it is priced here like any other fresh leaf.
                 if selector == crate::meter::ASSET_MINT_SELECTOR
                     && data.len() >= crate::meter::ASSET_MINT_DATA_BYTES
                 {
                     let holder = data[..32].to_vec();
                     self.charge_durable_target(DURABLE_MINT, &holder)?;
                 }
-                // A record is durable whatever its length, so the bytes alone do not
-                // price it. The allowance keeps an ordinary contract unaffected.
                 self.event_records += 1;
                 if self.event_records > crate::meter::FREE_EVENT_RECORDS {
                     self.charge(crate::meter::EVENT_RECORD_METER)?;
@@ -1077,8 +1038,6 @@ mod tests {
 
     #[test]
     fn reading_a_slot_never_makes_it_look_written() {
-        // A read-only entry must leave the outcome storage empty, otherwise a caller
-        // that persists the outcome writes back slots the entry never touched.
         let key = crate::abi::scalar_key(3);
         let code = program(&[
             Instr::Ldi { d: 0, imm: 0 },
@@ -1107,9 +1066,6 @@ mod tests {
 
     #[test]
     fn a_fetched_slot_is_counted_so_a_read_is_never_free() {
-        // Reads cost the node a trie lookup exactly like writes do. When fetched
-        // slots moved into their own cache they left the caller's per slot charge
-        // behind, so a call could walk an unbounded keyspace for nothing.
         let key = crate::abi::scalar_key(7);
         let code = program(&[
             Instr::Ldi { d: 0, imm: 0 },
@@ -1132,8 +1088,6 @@ mod tests {
 
     #[test]
     fn a_slot_is_fetched_on_demand_and_only_writes_are_reported_dirty() {
-        // The key lives in memory at offset 0. The interpreter is handed NO storage,
-        // so any value it reads can only have come from the loader.
         let key = crate::abi::scalar_key(7);
         let code = program(&[
             Instr::Ldi { d: 0, imm: 0 },
@@ -1508,7 +1462,6 @@ mod tests {
             mnemonic
         );
         let code = assemble(&src).expect("assemble");
-        // Generous against the repriced crypto opcodes, which are derived from measured CPU.
         let out = Interpreter::new(&code, &[], crate::meter::cost(OpCode::VerifySlh) * 4)
             .with_memory(region)
             .run()
@@ -2055,7 +2008,6 @@ mod fresh_account_pricing_tests {
     use super::*;
     use crate::asm::assemble;
 
-    // One send is a plain transfer and stays at the transfer price.
     #[test]
     fn a_single_recipient_is_not_charged_a_fresh_leaf() {
         let account = [9u8; 32];
@@ -2072,7 +2024,6 @@ mod fresh_account_pricing_tests {
         );
     }
 
-    // Two distinct recipients are two leaves, so the second is priced.
     #[test]
     fn a_second_distinct_recipient_pays_a_fresh_leaf() {
         let mut memory = Vec::new();
@@ -2094,7 +2045,6 @@ mod fresh_account_pricing_tests {
         assert_eq!(out.effects.len(), 2);
     }
 
-    // The chain turns this event into an asset balance leaf, so it is priced like one.
     #[test]
     fn a_minted_holder_past_the_first_pays_a_fresh_leaf() {
         let mut memory = Vec::new();
@@ -2116,8 +2066,6 @@ mod fresh_account_pricing_tests {
         );
     }
 
-    // A transfer to an id and a mint to the same id are two different leaves, an account
-    // balance and an asset balance, so one of them must not pay for both.
     #[test]
     fn a_send_and_a_mint_to_one_id_each_pay_for_their_own_leaf() {
         let mut memory = [0u8; 40];
@@ -2139,7 +2087,6 @@ mod fresh_account_pricing_tests {
         );
     }
 
-    // Repaying one recipient is one leaf, so it is charged once.
     #[test]
     fn repaying_the_same_recipient_is_charged_once() {
         let account = [9u8; 32];
@@ -2153,7 +2100,6 @@ mod fresh_account_pricing_tests {
         assert_eq!(out.effects.len(), 2, "both transfers were recorded");
     }
 
-    // The meter, not the effects cap, is what bounds fresh account leaves per transaction.
     #[test]
     fn one_transaction_cannot_buy_more_fresh_accounts_than_the_meter_pays_for() {
         let max_tx_meter = 50_000_000u64 / 4;
@@ -2172,10 +2118,6 @@ mod keyed_slot_pricing_tests {
     use crate::asm::assemble;
     use crate::container::{selector, Container, Entry, StateAccess};
 
-    // A distinct keyed slot becomes a permanent leaf in the state trie, and the node
-    // recomputes that root synchronously once per block. The meter has to price that work
-    // or one ordinary call buys enough leaves to stall every validator past the view
-    // timeout.
     const MAX_TX_METER: u64 = 12_500_000;
     const BLOCK_METER_BUDGET: u64 = 50_000_000;
 

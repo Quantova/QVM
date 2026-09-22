@@ -1,14 +1,12 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Fuzz harness. It feeds random bytes and random programs to the decoder and interpreter and
 
 use std::panic::catch_unwind;
 
 use qtv_vm::interp::Interpreter;
 use qtv_vm::isa::{decode, Instr, NUM_REGS};
 
-/// Every metered run is capped at this many meter units. Only a clean halt is free, so a run cannot
 pub const METER_BOUND: u64 = 100_000;
 
 struct Rng {
@@ -138,7 +136,6 @@ fn rand_program(rng: &mut Rng) -> Vec<u8> {
     code
 }
 
-/// Walk the decoder over the bytes. This must never panic on any input.
 fn decode_sweep(code: &[u8]) {
     let mut pc = 0usize;
     while pc < code.len() {
@@ -149,7 +146,6 @@ fn decode_sweep(code: &[u8]) {
     }
 }
 
-/// Decode and run one input. Returns nothing. It must not panic and must terminate within the meter
 fn exercise(code: &[u8], consts: &[u64]) {
     decode_sweep(code);
     if let Ok(outcome) = Interpreter::new(code, consts, METER_BOUND).run() {
@@ -157,7 +153,6 @@ fn exercise(code: &[u8], consts: &[u64]) {
     }
 }
 
-/// Run a batch of random inputs. Half are raw random bytes, half are random valid programs. A panic
 pub fn run_batch(seed: u64, count: usize) {
     let mut rng = Rng::new(seed ^ 11936128518282651045);
     for i in 0..count {
@@ -172,7 +167,6 @@ pub fn run_batch(seed: u64, count: usize) {
     }
 }
 
-/// Build one crypto case. Memory is filled with unconstrained bytes and the program invokes a single
 fn rand_crypto_case(rng: &mut Rng) -> (Vec<u8>, Vec<u8>) {
     let mem: Vec<u8> = (0..qtv_vm::state::MEM_BYTES)
         .map(|_| rng.next_u64() as u8)
@@ -201,7 +195,6 @@ fn exercise_crypto(code: &[u8], mem: &[u8]) {
         .run();
 }
 
-/// Run a batch of adversarial crypto cases. The interpreter firewall must map any primitive panic to
 pub fn run_crypto_batch(seed: u64, count: usize) {
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));

@@ -38,10 +38,6 @@ pub enum VerifyError {
 pub struct StateAccess {
     pub reads: Vec<u64>,
     pub writes: Vec<u64>,
-    // Keyed storage domains this entry may touch, given by their map base. A keyed slot lives at a
-    // runtime hash of a base and a key, which cannot be listed as an exact slot, so the entry declares
-    // the base and the machine authorises any key derived from a declared base. Declaring a base grants
-    // that map's whole keyspace and nothing else.
     pub keyed_reads: Vec<u64>,
     pub keyed_writes: Vec<u64>,
 }

@@ -219,7 +219,7 @@ mod tests {
         let mut m = Machine::new();
         assert!(m.mem_write(0, &pk));
         m.set_reg(0, 0);
-        m.set_reg(1, 3); // reserved FN-DSA, no address derivation in the tagged machine
+        m.set_reg(1, 3);
         m.set_reg(2, 40000);
         assert_eq!(address(&mut m, 0, 1, 2), Err(Fault::BadScheme));
     }

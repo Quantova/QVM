@@ -7,10 +7,6 @@ pub const DISPATCH: u64 = 4;
 
 pub const EFFECT_BYTE: u64 = 2;
 
-// An event record is written to the append only event store and never pruned, so its
-// bytes are as durable as contract code and cost the same. A transfer recipient is not
-// durable log, so it stays on EFFECT_BYTE above. At 2 a byte one block wrote 24 MB of
-// permanent log against a 1 MB ceiling on permanent code.
 pub const EVENT_BYTE: u64 = 100;
 
 pub const EFFECTS_BYTES_CAP: u64 = 1 << 20;
@@ -23,41 +19,24 @@ pub const HASH_BLOCK: u64 = 40;
 
 pub const MERKLE_LEVEL: u64 = 50;
 
-// A distinct keyed slot forces a fresh leaf in the state trie, whose root the node
-// recomputes once per block. Priced from that work, not from the opcode. One fresh leaf
-// measures about 0.9 ms of root recompute on a million leaf trie, so the block budget
-// divided by this has to stay inside a fraction of the block interval.
 pub const KEYED_SLOT_METER: u64 = 227_000;
 
-// What one whole block of fresh leaves may cost in root recompute. The price above is
-// derived from it, and this assert is what keeps the two in step.
 pub const LEAF_ROOT_BUDGET_MS: u64 = 200;
 pub const LEAF_ROOT_MICROS: u64 = 900;
 
-// Measured microseconds of real CPU per crypto opcode, and the meter per microsecond the
-// arithmetic column is calibrated at. The prices above are derived from these, and the
-// budget test is what keeps them in step rather than a comment.
 pub const METER_PER_MICRO: u64 = 79;
 pub const VERIFY_ML_MICROS: u64 = 288;
 pub const VERIFY_SLH_MICROS: u64 = 4_245;
 
-// A durable event record is written to the append only event store and held in the node's
-// event cache, and its root is recomputed per block. The bytes alone do not price it.
 pub const EVENT_RECORD_METER: u64 = 6_250;
 
-// What a contract may emit before each further record is priced as durable state.
 pub const FREE_EVENT_RECORDS: usize = 4;
 
-// The chain reads an event under this selector back as an asset mint, which writes a
-// balance leaf, so the meter has to price it the same as any other fresh leaf.
 pub const ASSET_MINT_SELECTOR: [u8; 4] = *b"MINT";
 pub const ASSET_MINT_DATA_BYTES: usize = 40;
 
-// What a contract may dirty before each further leaf is priced as fresh state.
 pub const FREE_DIRTY_SLOTS: usize = 8;
 
-// One keccak permutation of work, same as HASH_BLOCK. The message tail of a verify is
-// hashed exactly like any other bytes, so it is priced the same.
 pub const VERIFY_MESSAGE_BLOCK: u64 = 40;
 
 fn keccak_blocks(len: u64) -> u64 {
@@ -138,8 +117,6 @@ mod budget_tests {
 
     const BLOCK_METER_BUDGET: u64 = 50_000_000;
 
-    // The leaf price only means something if a whole block of leaves still roots inside
-    // the interval. If the measured cost moves, this is what fails rather than the chain.
     #[test]
     fn a_full_block_of_fresh_leaves_roots_inside_its_budget() {
         let leaves = BLOCK_METER_BUDGET / KEYED_SLOT_METER;
@@ -150,8 +127,6 @@ mod budget_tests {
         );
     }
 
-    // A crypto opcode that costs more CPU than it charges lets a contract inflate the
-    // real time of a block past what the budget says it bought.
     #[test]
     fn the_crypto_opcodes_charge_at_least_the_cpu_they_burn() {
         for (name, charged, micros) in [
@@ -166,7 +141,6 @@ mod budget_tests {
         }
     }
 
-    // Durable event bytes are as permanent as contract code, so they cost the same.
     #[test]
     fn a_durable_event_byte_costs_what_a_code_byte_costs() {
         const DEPLOY_BYTE_METER: u64 = 100;
@@ -177,7 +151,6 @@ mod budget_tests {
         );
     }
 
-    // Event records are durable, so a block of them has to stay bounded too.
     #[test]
     fn a_full_block_of_event_records_stays_bounded() {
         let records = BLOCK_METER_BUDGET / EVENT_RECORD_METER;
@@ -258,7 +231,6 @@ mod tests {
         .collect()
     }
 
-    // No wildcard, so a new instruction stops this compiling.
     fn is_listed(instr: &Instr) -> bool {
         let name = match instr {
             Instr::Halt => "Halt",

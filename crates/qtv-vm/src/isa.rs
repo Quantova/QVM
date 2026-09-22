@@ -899,7 +899,6 @@ mod decoder_hostile_input_tests {
         }
     }
 
-    // A deployed container is attacker supplied bytes.
     #[test]
     fn decoding_arbitrary_bytes_never_panics_and_never_yields_a_bad_register() {
         let mut rng = Rng(0x9E3779B97F4A7C15);
