@@ -1590,6 +1590,32 @@ mod tests {
     }
 
     #[test]
+    fn a_merkle_index_past_the_path_depth_does_not_verify() {
+        use qtv_crypto::sha3::sha3_256;
+        let data: Vec<[u8; 32]> = (0..4u8).map(|i| sha3_256(&[i])).collect();
+        let tagged: Vec<[u8; 32]> = data.iter().map(merkle_leaf).collect();
+        let p01 = merkle_node(&tagged[0], &tagged[1]);
+        let p23 = merkle_node(&tagged[2], &tagged[3]);
+        let root = merkle_node(&p01, &p23);
+        let region = |index: u64| {
+            let mut region = Vec::new();
+            region.extend_from_slice(&root);
+            region.extend_from_slice(&index.to_be_bytes());
+            region.extend_from_slice(&data[2]);
+            region.extend_from_slice(&tagged[3]);
+            region.extend_from_slice(&p01);
+            region
+        };
+        assert_eq!(run_verify("MERKLEVERIFY", &region(2)).0, 1);
+        assert_eq!(
+            run_verify("MERKLEVERIFY", &region(2 + 4)).0,
+            0,
+            "one leaf proves one index, not every index equal to it modulo the tree size"
+        );
+        assert_eq!(run_verify("MERKLEVERIFY", &region(2 | 1 << 63)).0, 0);
+    }
+
+    #[test]
     fn a_hash_scales_with_the_length_it_absorbs() {
         use crate::asm::assemble;
         let short = assemble("LDI r0, 0\nLDI r1, 8\nLDI r2, 40000\nHASH r0, r1, r2\nHALT")

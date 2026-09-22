@@ -113,7 +113,8 @@ pub(crate) fn merkle_verify(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(
             region[HEADER..].to_vec(),
         )
     };
-    if path.is_empty() {
+    let depth = path.len() / H;
+    if path.is_empty() || (depth < 64 && index >> depth != 0) {
         m.set_reg(c, 0);
         return Ok(());
     }
