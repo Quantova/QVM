@@ -682,9 +682,6 @@ impl<'a> Interpreter<'a> {
                 self.charge(crate::meter::merkle_variable(path))?;
                 self.run_crypto(|machine| crate::crypto::merkle_verify(machine, a, b, c))?;
             }
-            Instr::Kem { a, b, c } => {
-                self.run_crypto(|machine| crate::crypto::kem(machine, a, b, c))?;
-            }
             Instr::Addr { a, b, c } => {
                 self.run_crypto(|machine| crate::crypto::address(machine, a, b, c))?;
             }
@@ -1923,34 +1920,6 @@ mod tests {
             .run()
             .expect("halt");
         assert_eq!(out.regs[0], 9);
-    }
-
-    #[test]
-    fn kem_opcode_runs_metered() {
-        use crate::asm::assemble;
-        use qtv_crypto::ml_kem;
-        let (ek, _dk) = ml_kem::keygen(&[4u8; 32], &[5u8; 32]);
-        let msg = [6u8; 32];
-        let mut region = Vec::new();
-        region.extend_from_slice(&ek);
-        region.extend_from_slice(&msg);
-        let src = format!(
-            "LDI r0, 0\nLDI r1, {}\nLDI r2, 8192\nKEM r0, r1, r2\nMLOAD r3, r2\nHALT",
-            region.len()
-        );
-        let code = assemble(&src).expect("assemble");
-        let out = Interpreter::new(&code, &[], 100_000)
-            .with_memory(&region)
-            .run()
-            .expect("halt");
-        let (want_ss, _ct) = ml_kem::encaps(&ek, &msg).expect("a canonical encapsulation key");
-        let first = u64::from_be_bytes(want_ss[..8].try_into().unwrap());
-        assert_eq!(out.regs[3], first);
-        let expected = 3 * crate::meter::cost(OpCode::Ldi)
-            + crate::meter::cost(OpCode::Kem)
-            + crate::meter::cost(OpCode::MLoad)
-            + crate::meter::cost(OpCode::Halt);
-        assert_eq!(out.meter_used, expected);
     }
 
     #[test]

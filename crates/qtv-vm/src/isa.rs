@@ -57,7 +57,6 @@ pub enum OpCode {
     VerifyMl = 113,
     VerifySlh = 114,
     MerkleVerify = 115,
-    Kem = 117,
     Addr = 118,
 }
 
@@ -106,7 +105,6 @@ impl OpCode {
             113 => OpCode::VerifyMl,
             114 => OpCode::VerifySlh,
             115 => OpCode::MerkleVerify,
-            117 => OpCode::Kem,
             118 => OpCode::Addr,
             _ => return None,
         };
@@ -309,11 +307,6 @@ pub enum Instr {
         b: Reg,
         c: Reg,
     },
-    Kem {
-        a: Reg,
-        b: Reg,
-        c: Reg,
-    },
     Addr {
         a: Reg,
         b: Reg,
@@ -373,7 +366,6 @@ impl Instr {
             Instr::VerifyMl { .. } => OpCode::VerifyMl,
             Instr::VerifySlh { .. } => OpCode::VerifySlh,
             Instr::MerkleVerify { .. } => OpCode::MerkleVerify,
-            Instr::Kem { .. } => OpCode::Kem,
             Instr::Addr { .. } => OpCode::Addr,
         }
     }
@@ -460,7 +452,6 @@ impl Instr {
             | Instr::VerifyMl { a, b, c }
             | Instr::VerifySlh { a, b, c }
             | Instr::MerkleVerify { a, b, c }
-            | Instr::Kem { a, b, c }
             | Instr::Addr { a, b, c } => {
                 out.push(a);
                 out.push(b);
@@ -659,11 +650,6 @@ pub fn decode(code: &[u8], pc: usize) -> Result<(Instr, usize), DecodeError> {
             b: c.reg()?,
             c: c.reg()?,
         },
-        OpCode::Kem => Instr::Kem {
-            a: c.reg()?,
-            b: c.reg()?,
-            c: c.reg()?,
-        },
         OpCode::Addr => Instr::Addr {
             a: c.reg()?,
             b: c.reg()?,
@@ -718,6 +704,12 @@ impl Cursor<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_retired_encapsulation_opcode_does_not_decode() {
+        assert!(OpCode::from_byte(117).is_none());
+        assert!(crate::asm::assemble("LDI r0, 0\nKEM r0, r0, r0\nHALT").is_err());
+    }
 
     fn sample_set() -> Vec<Instr> {
         vec![
@@ -782,7 +774,6 @@ mod tests {
             Instr::VerifyMl { a: 1, b: 2, c: 3 },
             Instr::VerifySlh { a: 1, b: 2, c: 3 },
             Instr::MerkleVerify { a: 1, b: 2, c: 3 },
-            Instr::Kem { a: 1, b: 2, c: 3 },
             Instr::Addr { a: 1, b: 2, c: 3 },
         ]
     }
@@ -893,7 +884,6 @@ mod decoder_hostile_input_tests {
             | Instr::VerifyMl { a, b, c }
             | Instr::VerifySlh { a, b, c }
             | Instr::MerkleVerify { a, b, c }
-            | Instr::Kem { a, b, c }
             | Instr::Addr { a, b, c } => vec![a, b, c],
         }
     }

@@ -40,7 +40,6 @@ pub const LEAF_ROOT_MICROS: u64 = 900;
 pub const METER_PER_MICRO: u64 = 79;
 pub const VERIFY_ML_MICROS: u64 = 288;
 pub const VERIFY_SLH_MICROS: u64 = 4_245;
-pub const KEM_MICROS: u64 = 255;
 
 // A durable event record is written to the append only event store and held in the node's
 // event cache, and its root is recomputed per block. The bytes alone do not price it.
@@ -129,7 +128,6 @@ pub fn cost(op: OpCode) -> u64 {
         OpCode::VerifyMl => 60_000,
         OpCode::VerifySlh => 340_000,
         OpCode::MerkleVerify => 512,
-        OpCode::Kem => 21_000,
         OpCode::Addr => 4_000,
     }
 }
@@ -159,7 +157,6 @@ mod budget_tests {
         for (name, charged, micros) in [
             ("VerifyMl", cost(OpCode::VerifyMl), VERIFY_ML_MICROS),
             ("VerifySlh", cost(OpCode::VerifySlh), VERIFY_SLH_MICROS),
-            ("Kem", cost(OpCode::Kem), KEM_MICROS),
         ] {
             let owed = micros * METER_PER_MICRO;
             assert!(
@@ -254,7 +251,6 @@ mod tests {
             Instr::VerifyMl { a: 0, b: 0, c: 0 },
             Instr::VerifySlh { a: 0, b: 0, c: 0 },
             Instr::MerkleVerify { a: 0, b: 0, c: 0 },
-            Instr::Kem { a: 0, b: 0, c: 0 },
             Instr::Addr { a: 0, b: 0, c: 0 },
         ]
         .iter()
@@ -307,7 +303,6 @@ mod tests {
             Instr::VerifyMl { .. } => "VerifyMl",
             Instr::VerifySlh { .. } => "VerifySlh",
             Instr::MerkleVerify { .. } => "MerkleVerify",
-            Instr::Kem { .. } => "Kem",
             Instr::Addr { .. } => "Addr",
         };
         let _ = name;
@@ -319,7 +314,7 @@ mod tests {
         let listed = every_opcode();
         assert_eq!(
             listed.len(),
-            44,
+            43,
             "every_opcode no longer matches the instruction set, so only_halt_is_free is \
              walking a partial list and a new free instruction would go unnoticed"
         );

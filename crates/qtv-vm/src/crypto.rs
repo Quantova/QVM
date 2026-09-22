@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use qtv_crypto::sha3::sha3_256;
-use qtv_crypto::{ml_dsa, ml_kem, slh_dsa};
+use qtv_crypto::{ml_dsa, slh_dsa};
 
 use crate::interp::Fault;
 use crate::isa::Reg;
@@ -129,33 +129,6 @@ pub(crate) fn merkle_verify(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(
         };
     }
     m.set_reg(c, u64::from(node == root));
-    Ok(())
-}
-
-pub(crate) fn kem(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), Fault> {
-    const EK: usize = ml_kem::ENCAPS_KEY_BYTES;
-    const MSG: usize = ml_kem::SEED_BYTES;
-    let ptr = m.reg(a);
-    let len = m.reg(b);
-    let out = m.reg(c);
-    let (ek, msg) = {
-        let region = m.mem_region(ptr, len).ok_or(Fault::BadMemory)?;
-        if region.len() < EK + MSG {
-            return Err(Fault::BadMemory);
-        }
-        let ek: [u8; EK] = region[..EK].try_into().map_err(|_| Fault::BadMemory)?;
-        let msg: [u8; MSG] = region[EK..EK + MSG]
-            .try_into()
-            .map_err(|_| Fault::BadMemory)?;
-        (ek, msg)
-    };
-    let (shared, ciphertext) = ml_kem::encaps(&ek, &msg).ok_or(Fault::CryptoFault)?;
-    let mut output = [0u8; ml_kem::SHARED_SECRET_BYTES + ml_kem::CIPHERTEXT_BYTES];
-    output[..ml_kem::SHARED_SECRET_BYTES].copy_from_slice(&shared);
-    output[ml_kem::SHARED_SECRET_BYTES..].copy_from_slice(&ciphertext);
-    if !m.mem_write(out, &output) {
-        return Err(Fault::BadMemory);
-    }
     Ok(())
 }
 
@@ -450,54 +423,5 @@ mod tests {
         m.set_reg(1, region.len() as u64);
         merkle_verify(&mut m, 0, 1, 2).expect("merkle");
         assert_eq!(m.reg(2), 0, "a proof with no siblings must not verify");
-    }
-
-    #[test]
-    fn kem_encapsulates_and_matches_decapsulation() {
-        let (ek, dk) = ml_kem::keygen(&[4u8; 32], &[5u8; 32]);
-        let msg = [6u8; 32];
-
-        let mut region = Vec::new();
-        region.extend_from_slice(&ek);
-        region.extend_from_slice(&msg);
-        let mut m = Machine::new();
-        assert!(m.mem_write(0, &region));
-        m.set_reg(0, 0);
-        m.set_reg(1, region.len() as u64);
-        m.set_reg(2, 4096);
-        kem(&mut m, 0, 1, 2).expect("kem");
-
-        let total = ml_kem::SHARED_SECRET_BYTES + ml_kem::CIPHERTEXT_BYTES;
-        let out = m.mem_region(4096, total as u64).unwrap();
-        let shared = &out[..ml_kem::SHARED_SECRET_BYTES];
-        let ciphertext: [u8; ml_kem::CIPHERTEXT_BYTES] =
-            out[ml_kem::SHARED_SECRET_BYTES..].try_into().unwrap();
-        assert_eq!(&ml_kem::decaps(&dk, &ciphertext)[..], shared);
-        let (want_ss, want_ct) = ml_kem::encaps(&ek, &msg).expect("a canonical encapsulation key");
-        assert_eq!(shared, &want_ss[..]);
-        assert_eq!(&ciphertext[..], &want_ct[..]);
-    }
-
-    #[test]
-    fn kem_rejects_short_region() {
-        let mut m = Machine::new();
-        m.set_reg(0, 0);
-        m.set_reg(1, 100);
-        m.set_reg(2, 4096);
-        assert_eq!(kem(&mut m, 0, 1, 2), Err(Fault::BadMemory));
-    }
-
-    #[test]
-    fn kem_rejects_out_of_bounds_output() {
-        let (ek, _dk) = ml_kem::keygen(&[4u8; 32], &[5u8; 32]);
-        let mut region = Vec::new();
-        region.extend_from_slice(&ek);
-        region.extend_from_slice(&[6u8; 32]);
-        let mut m = Machine::new();
-        assert!(m.mem_write(0, &region));
-        m.set_reg(0, 0);
-        m.set_reg(1, region.len() as u64);
-        m.set_reg(2, u64::MAX);
-        assert_eq!(kem(&mut m, 0, 1, 2), Err(Fault::BadMemory));
     }
 }
