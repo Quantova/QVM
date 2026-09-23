@@ -7,4 +7,4 @@ edition = "2021"
 
 [dependencies]
 qtv-vm = { path = "../crates/qtv-vm" }
-qtv-crypto = { git = "https://github.com/Quantova/Q-Crypto.git", rev = "292594d18080179e304576164f44703d410d919f" }
+qtv-crypto = { git = "https://github.com/Quantova/Q-Crypto.git", rev = "80b30f55cc563018b997eea20c6ee48b76424fa9" }
