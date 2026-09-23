@@ -95,7 +95,6 @@ struct Manifest {
     writes: BTreeSet<StorageKey>,
     keyed_reads: BTreeSet<u64>,
     keyed_writes: BTreeSet<u64>,
-    boundaries: BTreeSet<u32>,
 }
 
 impl Manifest {
@@ -124,6 +123,7 @@ pub struct Interpreter<'a> {
     durable_targets: BTreeSet<Vec<u8>>,
     event_records: usize,
     manifest: Option<Manifest>,
+    bounds: BTreeSet<u32>,
     keyed_authorized_reads: BTreeSet<StorageKey>,
     keyed_authorized_writes: BTreeSet<StorageKey>,
 }
@@ -146,6 +146,7 @@ impl<'a> Interpreter<'a> {
             durable_targets: BTreeSet::new(),
             event_records: 0,
             manifest: None,
+            bounds: boundaries(code),
             keyed_authorized_reads: BTreeSet::new(),
             keyed_authorized_writes: BTreeSet::new(),
         }
@@ -191,11 +192,10 @@ impl<'a> Interpreter<'a> {
             .collect();
         let keyed_reads = entry.access.keyed_reads.iter().copied().collect();
         let keyed_writes = entry.access.keyed_writes.iter().copied().collect();
-        let bounds = boundaries(&container.code);
-        if !bounds.contains(&entry.offset) {
+        let mut interp = Interpreter::new(&container.code, &container.consts, meter_limit);
+        if !interp.bounds.contains(&entry.offset) {
             return Err(Fault::Malformed);
         }
-        let mut interp = Interpreter::new(&container.code, &container.consts, meter_limit);
         interp.machine.pc = entry.offset;
         interp.meter_used = crate::meter::DISPATCH;
         interp.manifest = Some(Manifest {
@@ -203,7 +203,6 @@ impl<'a> Interpreter<'a> {
             writes,
             keyed_reads,
             keyed_writes,
-            boundaries: bounds,
         });
         Ok(interp)
     }
@@ -356,10 +355,7 @@ impl<'a> Interpreter<'a> {
     }
 
     fn target_ok(&self, target: u32) -> bool {
-        match &self.manifest {
-            Some(man) => man.boundaries.contains(&target),
-            None => (target as usize) < self.code.len(),
-        }
+        self.bounds.contains(&target)
     }
 
     fn step(&mut self, instr: Instr) -> Result<Step, Fault> {

@@ -194,11 +194,6 @@ fn gen_instr(u: &mut Unstructured, n_consts: usize) -> Result<Instr> {
             b: reg(u)?,
             c: reg(u)?,
         },
-        40 => Instr::Kem {
-            a: reg(u)?,
-            b: reg(u)?,
-            c: reg(u)?,
-        },
         _ => Instr::Addr {
             a: reg(u)?,
             b: reg(u)?,

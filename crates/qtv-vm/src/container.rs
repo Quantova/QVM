@@ -165,7 +165,8 @@ pub fn selector(signature: &str) -> [u8; SELECTOR_BYTES] {
 }
 
 fn put_len(out: &mut Vec<u8>, len: usize) {
-    out.extend_from_slice(&(len as u32).to_be_bytes());
+    let len = u32::try_from(len).unwrap_or(u32::MAX);
+    out.extend_from_slice(&len.to_be_bytes());
 }
 
 fn put_slots(out: &mut Vec<u8>, slots: &[u64]) {

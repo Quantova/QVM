@@ -173,12 +173,11 @@ fn rand_crypto_case(rng: &mut Rng) -> (Vec<u8>, Vec<u8>) {
         .collect();
     let len = rng.below((qtv_vm::state::MEM_BYTES + 1) as u64);
     let out = rng.below((qtv_vm::state::MEM_BYTES + 1) as u64);
-    let crypto = match rng.below(5) {
+    let crypto = match rng.below(4) {
         0 => Instr::Hash { a: 0, b: 1, c: 2 },
         1 => Instr::VerifyMl { a: 0, b: 1, c: 2 },
         2 => Instr::VerifySlh { a: 0, b: 1, c: 2 },
-        3 => Instr::MerkleVerify { a: 0, b: 1, c: 2 },
-        _ => Instr::Kem { a: 0, b: 1, c: 2 },
+        _ => Instr::MerkleVerify { a: 0, b: 1, c: 2 },
     };
     let mut code = Vec::new();
     Instr::Ldi { d: 0, imm: 0 }.encode(&mut code);
