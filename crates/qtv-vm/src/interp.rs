@@ -175,7 +175,9 @@ impl<'a> Interpreter<'a> {
         if declared > crate::container::MAX_ACCESS_SLOTS {
             return Err(Fault::Malformed);
         }
-        if crate::meter::DISPATCH > meter_limit {
+        let scan = (container.code.len() as u64).saturating_mul(crate::meter::CODE_SCAN_PER_BYTE);
+        let dispatch = crate::meter::DISPATCH.saturating_add(scan);
+        if dispatch > meter_limit {
             return Err(Fault::OutOfMeter);
         }
         let reads = entry
@@ -197,7 +199,7 @@ impl<'a> Interpreter<'a> {
             return Err(Fault::Malformed);
         }
         interp.machine.pc = entry.offset;
-        interp.meter_used = crate::meter::DISPATCH;
+        interp.meter_used = dispatch;
         interp.manifest = Some(Manifest {
             reads,
             writes,
@@ -1971,8 +1973,10 @@ mod tests {
         assert_eq!(
             b.meter_used,
             crate::meter::DISPATCH
+                + container.code.len() as u64 * crate::meter::CODE_SCAN_PER_BYTE
                 + crate::meter::cost(OpCode::Ldi)
-                + crate::meter::cost(OpCode::Halt)
+                + crate::meter::cost(OpCode::Halt),
+            "a dispatch pays the flat cost plus the walk over the contract's own code"
         );
     }
 

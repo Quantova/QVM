@@ -37,6 +37,8 @@ pub const ASSET_MINT_DATA_BYTES: usize = 40;
 
 pub const FREE_DIRTY_SLOTS: usize = 8;
 
+pub const CODE_SCAN_PER_BYTE: u64 = METER_PER_MICRO / 8;
+
 pub const VERIFY_MESSAGE_BLOCK: u64 = 40;
 
 fn keccak_blocks(len: u64) -> u64 {
@@ -302,5 +304,22 @@ mod tests {
                 assert!(cost(op) >= 1, "{op:?} must charge at least one meter");
             }
         }
+    }
+
+    const BLOCK_BUDGET: u64 = 50_000_000;
+
+    #[test]
+    fn a_dispatch_of_the_largest_contract_costs_more_than_a_slot_write() {
+        let largest = crate::container::MAX_CODE_BYTES as u64 * CODE_SCAN_PER_BYTE;
+        assert!(
+            largest > KEYED_SLOT_METER,
+            "a full size dispatch costs {largest}, under the {KEYED_SLOT_METER} a slot costs"
+        );
+        let per_block = BLOCK_BUDGET / largest;
+        assert!(
+            per_block <= 128,
+            "a block can dispatch {per_block} maximum sized contracts, more scanning than a \
+             block interval affords"
+        );
     }
 }
