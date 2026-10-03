@@ -1418,7 +1418,8 @@ mod tests {
 
         let (pk, sk) = ml_dsa::keygen(&[9u8; 32]);
         let message = b"quantova hand assembled milestone";
-        let signature = ml_dsa::sign(&sk, message, &[], &[0u8; 32]).expect("sign");
+        let signature =
+            ml_dsa::sign(&sk, message, crate::crypto::VM_VERIFY_CONTEXT, &[0u8; 32]).expect("sign");
 
         let mut region = Vec::new();
         region.extend_from_slice(&pk);
@@ -1503,7 +1504,8 @@ mod tests {
         use qtv_crypto::slh_dsa;
         let (sk, pk) = slh_dsa::keygen(&[1u8; 24], &[2u8; 24], &[3u8; 24]);
         let message = b"quantova slh metered";
-        let sig = slh_dsa::sign(&sk, message, &[], &[4u8; 24]).expect("sign");
+        let sig = slh_dsa::sign(&sk, message, crate::crypto::VM_VERIFY_CONTEXT, &[4u8; 24])
+            .expect("sign");
         let mut region = Vec::new();
         region.extend_from_slice(&pk);
         region.extend_from_slice(&sig);

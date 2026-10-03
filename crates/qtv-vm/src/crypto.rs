@@ -11,6 +11,8 @@ use crate::state::Machine;
 pub const SCHEME_ML_DSA: u64 = 1;
 pub const SCHEME_SLH_DSA: u64 = 2;
 
+pub const VM_VERIFY_CONTEXT: &[u8] = b"QVM/contract/v1";
+
 pub const ML_DSA_SIGNED_BYTES: u64 = (ml_dsa::PUBLIC_KEY_BYTES + ml_dsa::SIGNATURE_BYTES) as u64;
 pub const SLH_DSA_SIGNED_BYTES: u64 = (slh_dsa::PUBLIC_KEY_BYTES + slh_dsa::SIGNATURE_BYTES) as u64;
 pub const MERKLE_HEADER: u64 = (2 * 32 + 8) as u64;
@@ -63,7 +65,7 @@ pub(crate) fn verify_ml(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), F
             .map_err(|_| Fault::BadMemory)?;
         (pk, sig, region[PK + SIG..].to_vec())
     };
-    let ok = ml_dsa::verify(&pk, &message, &sig, &[]);
+    let ok = ml_dsa::verify(&pk, &message, &sig, VM_VERIFY_CONTEXT);
     m.set_reg(c, u64::from(ok));
     Ok(())
 }
@@ -85,7 +87,7 @@ pub(crate) fn verify_slh(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), 
             region[PK + SIG..].to_vec(),
         )
     };
-    let ok = slh_dsa::verify(&pk, &message, &sig, &[]);
+    let ok = slh_dsa::verify(&pk, &message, &sig, VM_VERIFY_CONTEXT);
     m.set_reg(c, u64::from(ok));
     Ok(())
 }
@@ -286,7 +288,8 @@ mod tests {
     fn verify_ml_accepts_valid_and_rejects_tampered() {
         let (pk, sk) = ml_dsa::keygen(&[7u8; 32]);
         let msg = b"quantova ml-dsa verify opcode";
-        let sig = ml_dsa::sign(&sk, msg, &[], &[0u8; 32]).expect("sign");
+        let sig =
+            ml_dsa::sign(&sk, msg, crate::crypto::VM_VERIFY_CONTEXT, &[0u8; 32]).expect("sign");
 
         let mut m = Machine::new();
         load_ml(&mut m, &pk, &sig, msg);
@@ -323,7 +326,8 @@ mod tests {
     fn verify_slh_accepts_valid_and_rejects_tampered() {
         let (sk, pk) = slh_dsa::keygen(&[1u8; 24], &[2u8; 24], &[3u8; 24]);
         let msg = b"quantova slh-dsa verify opcode";
-        let sig = slh_dsa::sign(&sk, msg, &[], &[4u8; 24]).expect("sign");
+        let sig =
+            slh_dsa::sign(&sk, msg, crate::crypto::VM_VERIFY_CONTEXT, &[4u8; 24]).expect("sign");
 
         let mut m = Machine::new();
         load_region(&mut m, &[&pk, &sig, msg]);
