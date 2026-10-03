@@ -129,7 +129,7 @@ pub struct Interpreter<'a> {
 }
 
 impl<'a> Interpreter<'a> {
-    pub fn new(code: &'a [u8], consts: &'a [u64], meter_limit: u64) -> Self {
+    pub(crate) fn new(code: &'a [u8], consts: &'a [u64], meter_limit: u64) -> Self {
         Interpreter {
             code,
             consts,
@@ -150,6 +150,10 @@ impl<'a> Interpreter<'a> {
             keyed_authorized_reads: BTreeSet::new(),
             keyed_authorized_writes: BTreeSet::new(),
         }
+    }
+
+    pub fn for_system_program(code: &'a [u8], consts: &'a [u64], meter_limit: u64) -> Self {
+        Interpreter::new(code, consts, meter_limit)
     }
 
     pub fn for_entry(
