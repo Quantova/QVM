@@ -347,10 +347,15 @@ impl<'a> Interpreter<'a> {
             }
             None => return Ok(()),
         };
-        if is_write && self.keyed_authorized_writes.insert(key) {
-            self.charge_keyed()?;
+        let already = self.keyed_authorized_writes.contains(&key)
+            || self.keyed_authorized_reads.contains(&key);
+        if is_write {
+            self.keyed_authorized_writes.insert(key);
         }
-        if is_read && self.keyed_authorized_reads.insert(key) {
+        if is_read {
+            self.keyed_authorized_reads.insert(key);
+        }
+        if !already {
             self.charge_keyed()?;
         }
         Ok(())
