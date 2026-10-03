@@ -6,7 +6,7 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-#[cfg(panic = "abort")]
+#[cfg(all(panic = "abort", not(target_arch = "wasm32")))]
 compile_error!("qtv-vm must be built with panic = \"unwind\" so a crypto panic becomes a fault instead of aborting the node");
 
 pub mod abi;
