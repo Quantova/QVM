@@ -2,7 +2,6 @@
 **/*.rs.bk
 .DS_Store
 
-Cargo.lock
 
 /fuzz/target
 /fuzz/corpus
