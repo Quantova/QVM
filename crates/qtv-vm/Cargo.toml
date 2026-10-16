@@ -11,3 +11,6 @@ description = "Quantova register virtual machine core with instruction set, dete
 
 [dependencies]
 qtv-crypto = { git = "https://github.com/Quantova/Q-Crypto.git", rev = "12fefda211c5b7f8a8e9ed60e6a35d880da54c38" }
+
+[features]
+unchecked-programs = []

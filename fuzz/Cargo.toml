@@ -13,7 +13,7 @@ description = "Fuzz harness that feeds random bytes and random programs to the d
 cargo-fuzz = true
 
 [dependencies]
-qtv-vm = { path = "../crates/qtv-vm" }
+qtv-vm = { path = "../crates/qtv-vm", features = ["unchecked-programs"] }
 libfuzzer-sys = "0.4"
 arbitrary = "1"
 

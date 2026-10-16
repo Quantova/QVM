@@ -3,6 +3,16 @@
 
 name: ci
 on: [push, pull_request]
+permissions:
+  contents: read
 jobs:
   ci:
-    uses: Quantova/Quantova-Ci/.github/workflows/rust-ci.yml@f2a7a9c5bee34b20876b110ba903d0008b9e90d1
+    uses: Quantova/Quantova-Ci/.github/workflows/rust-ci.yml@0519572bfa55108c29aa5a5d391dd9df5b52b99d
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: "1.98.0"
+      - run: cargo test --locked --release --manifest-path fuzz/Cargo.toml
