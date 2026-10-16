@@ -21,6 +21,10 @@ pub const MERKLE_LEVEL: u64 = 50;
 
 pub const KEYED_SLOT_METER: u64 = 227_000;
 
+pub const KEYED_READ_MICROS: u64 = 12;
+
+pub const KEYED_READ_METER: u64 = METER_PER_MICRO * KEYED_READ_MICROS;
+
 pub const LEAF_ROOT_BUDGET_MS: u64 = 200;
 pub const LEAF_ROOT_MICROS: u64 = 900;
 

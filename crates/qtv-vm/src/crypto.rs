@@ -20,14 +20,14 @@ pub const MERKLE_HEADER: u64 = (2 * 32 + 8) as u64;
 const MERKLE_LEAF_TAG: u8 = 0x00;
 const MERKLE_NODE_TAG: u8 = 0x01;
 
-fn merkle_leaf(leaf: &[u8; 32]) -> [u8; 32] {
+pub(crate) fn merkle_leaf(leaf: &[u8; 32]) -> [u8; 32] {
     let mut buf = [0u8; 33];
     buf[0] = MERKLE_LEAF_TAG;
     buf[1..].copy_from_slice(leaf);
     sha3_256(&buf)
 }
 
-fn merkle_node(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+pub(crate) fn merkle_node(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     let mut buf = [0u8; 65];
     buf[0] = MERKLE_NODE_TAG;
     buf[1..33].copy_from_slice(left);
@@ -92,7 +92,13 @@ pub(crate) fn verify_slh(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), 
     Ok(())
 }
 
-pub(crate) fn merkle_verify(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), Fault> {
+pub(crate) fn merkle_verify(
+    m: &mut Machine,
+    a: Reg,
+    b: Reg,
+    c: Reg,
+    strict: bool,
+) -> Result<(), Fault> {
     const H: usize = 32;
     const HEADER: usize = 2 * H + 8;
     let ptr = m.reg(a);
@@ -116,7 +122,7 @@ pub(crate) fn merkle_verify(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(
         )
     };
     let depth = path.len() / H;
-    if path.is_empty() || (depth < 64 && index >> depth != 0) {
+    if path.is_empty() || (depth < 64 && index >> depth != 0) || (strict && depth > 64) {
         m.set_reg(c, 0);
         return Ok(());
     }
@@ -376,7 +382,7 @@ mod tests {
         assert!(m.mem_write(0, &region));
         m.set_reg(0, 0);
         m.set_reg(1, region.len() as u64);
-        merkle_verify(&mut m, 0, 1, 2).expect("merkle");
+        merkle_verify(&mut m, 0, 1, 2, true).expect("merkle");
         assert_eq!(m.reg(2), 1);
 
         let mut bad = region;
@@ -385,7 +391,7 @@ mod tests {
         assert!(m.mem_write(0, &bad));
         m.set_reg(0, 0);
         m.set_reg(1, bad.len() as u64);
-        merkle_verify(&mut m, 0, 1, 2).expect("merkle");
+        merkle_verify(&mut m, 0, 1, 2, true).expect("merkle");
         assert_eq!(m.reg(2), 0);
     }
 
@@ -394,9 +400,9 @@ mod tests {
         let mut m = Machine::new();
         m.set_reg(0, 0);
         m.set_reg(1, (2 * 32 + 8 + 5) as u64);
-        assert_eq!(merkle_verify(&mut m, 0, 1, 2), Err(Fault::BadMemory));
+        assert_eq!(merkle_verify(&mut m, 0, 1, 2, true), Err(Fault::BadMemory));
         m.set_reg(1, 8);
-        assert_eq!(merkle_verify(&mut m, 0, 1, 2), Err(Fault::BadMemory));
+        assert_eq!(merkle_verify(&mut m, 0, 1, 2, true), Err(Fault::BadMemory));
     }
 
     #[test]
@@ -413,7 +419,7 @@ mod tests {
         assert!(m.mem_write(0, &region));
         m.set_reg(0, 0);
         m.set_reg(1, region.len() as u64);
-        merkle_verify(&mut m, 0, 1, 2).expect("merkle");
+        merkle_verify(&mut m, 0, 1, 2, true).expect("merkle");
         assert_eq!(m.reg(2), 0, "an internal node must not verify as a leaf");
     }
 
@@ -425,7 +431,7 @@ mod tests {
         assert!(m.mem_write(0, &region));
         m.set_reg(0, 0);
         m.set_reg(1, region.len() as u64);
-        merkle_verify(&mut m, 0, 1, 2).expect("merkle");
+        merkle_verify(&mut m, 0, 1, 2, true).expect("merkle");
         assert_eq!(m.reg(2), 0, "a proof with no siblings must not verify");
     }
 }

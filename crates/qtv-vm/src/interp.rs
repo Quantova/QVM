@@ -126,6 +126,8 @@ pub struct Interpreter<'a> {
     bounds: BTreeSet<u32>,
     keyed_authorized_reads: BTreeSet<StorageKey>,
     keyed_authorized_writes: BTreeSet<StorageKey>,
+    fresh_charged: BTreeSet<StorageKey>,
+    strict: bool,
 }
 
 impl<'a> Interpreter<'a> {
@@ -149,14 +151,45 @@ impl<'a> Interpreter<'a> {
             bounds: boundaries(code),
             keyed_authorized_reads: BTreeSet::new(),
             keyed_authorized_writes: BTreeSet::new(),
+            fresh_charged: BTreeSet::new(),
+            strict: true,
         }
     }
 
-    pub fn for_system_program(code: &'a [u8], consts: &'a [u64], meter_limit: u64) -> Self {
+    pub fn with_legacy_rules(mut self) -> Self {
+        self.strict = false;
+        self
+    }
+
+    pub fn for_system_program(code: &'static [u8], consts: &'a [u64], meter_limit: u64) -> Self {
+        Interpreter::new(code, consts, meter_limit)
+    }
+
+    #[cfg(any(test, feature = "unchecked-programs"))]
+    pub fn for_unchecked_program(code: &'a [u8], consts: &'a [u64], meter_limit: u64) -> Self {
         Interpreter::new(code, consts, meter_limit)
     }
 
     pub fn for_entry(
+        container: &'a Container,
+        selector: [u8; SELECTOR_BYTES],
+        meter_limit: u64,
+    ) -> Result<Self, Fault> {
+        if selector == crate::container::selector(crate::container::GENESIS_SIGNATURE) {
+            return Err(Fault::UnknownSelector);
+        }
+        Interpreter::open_entry(container, selector, meter_limit)
+    }
+
+    pub fn for_genesis(container: &'a Container, meter_limit: u64) -> Result<Self, Fault> {
+        Interpreter::open_entry(
+            container,
+            crate::container::selector(crate::container::GENESIS_SIGNATURE),
+            meter_limit,
+        )
+    }
+
+    fn open_entry(
         container: &'a Container,
         selector: [u8; SELECTOR_BYTES],
         meter_limit: u64,
@@ -167,11 +200,11 @@ impl<'a> Interpreter<'a> {
         {
             return Err(Fault::Malformed);
         }
-        let entry = container
-            .entries
-            .iter()
-            .find(|e| e.selector == selector)
-            .ok_or(Fault::UnknownSelector)?;
+        let mut matching = container.entries.iter().filter(|e| e.selector == selector);
+        let entry = matching.next().ok_or(Fault::UnknownSelector)?;
+        if matching.next().is_some() {
+            return Err(Fault::Malformed);
+        }
         let declared = entry.access.reads.len()
             + entry.access.writes.len()
             + entry.access.keyed_reads.len()
@@ -316,7 +349,11 @@ impl<'a> Interpreter<'a> {
     }
 
     fn charge_keyed(&mut self) -> Result<(), Fault> {
-        self.charge(crate::meter::KEYED_SLOT_METER)?;
+        if self.strict {
+            self.charge(crate::meter::KEYED_READ_METER)?;
+        } else {
+            self.charge(crate::meter::KEYED_SLOT_METER)?;
+        }
         let retained = self
             .keyed_bytes
             .checked_add(STORAGE_KEY_BYTES as u64)
@@ -580,7 +617,35 @@ impl<'a> Interpreter<'a> {
                         return Err(Fault::UndeclaredSlot);
                     }
                 }
-                if self.dirty.insert(key) && self.dirty.len() > crate::meter::FREE_DIRTY_SLOTS {
+                if self.strict {
+                    let prior = match self.storage.get(&key) {
+                        Some(v) => *v,
+                        None => match self.loaded.get(&key) {
+                            Some(v) => *v,
+                            None => match self.loader {
+                                Some(f) => {
+                                    let fetched = f(&key);
+                                    self.loaded.insert(key, fetched);
+                                    fetched
+                                }
+                                None => 0,
+                            },
+                        },
+                    };
+                    let fresh = val != 0 && prior == 0 && !self.fresh_charged.contains(&key);
+                    let keyed = self.keyed_authorized_writes.contains(&key);
+                    if fresh && (keyed || self.dirty.len() >= crate::meter::FREE_DIRTY_SLOTS) {
+                        self.fresh_charged.insert(key);
+                        self.charge(crate::meter::KEYED_SLOT_METER)?;
+                    } else if self.dirty.insert(key)
+                        && self.dirty.len() > crate::meter::FREE_DIRTY_SLOTS
+                    {
+                        self.charge(crate::meter::KEYED_READ_METER)?;
+                    }
+                    self.dirty.insert(key);
+                } else if self.dirty.insert(key)
+                    && self.dirty.len() > crate::meter::FREE_DIRTY_SLOTS
+                {
                     self.charge(crate::meter::KEYED_SLOT_METER)?;
                 }
                 self.storage.insert(key, val);
@@ -598,6 +663,9 @@ impl<'a> Interpreter<'a> {
             }
 
             Instr::Emit { a, b, c } => {
+                if self.strict && m.reg(c) > u64::from(u32::MAX) {
+                    return Err(Fault::Malformed);
+                }
                 let selector = (m.reg(c) as u32).to_be_bytes();
                 let data = m
                     .mem_region(m.reg(a), m.reg(b))
@@ -648,7 +716,8 @@ impl<'a> Interpreter<'a> {
             Instr::MerkleVerify { a, b, c } => {
                 let path = m.reg(b).saturating_sub(crate::crypto::MERKLE_HEADER);
                 self.charge(crate::meter::merkle_variable(path))?;
-                self.run_crypto(|machine| crate::crypto::merkle_verify(machine, a, b, c))?;
+                let strict = self.strict;
+                self.run_crypto(|machine| crate::crypto::merkle_verify(machine, a, b, c, strict))?;
             }
             Instr::Addr { a, b, c } => {
                 self.run_crypto(|machine| crate::crypto::address(machine, a, b, c))?;
@@ -2175,6 +2244,64 @@ mod keyed_slot_pricing_tests {
         );
     }
 
+    fn keyed_call(program: &str, reads: bool, loaded: u64, legacy: bool) -> Result<Outcome, Fault> {
+        let base: u64 = 1 << 40;
+        let code = assemble(program).expect("assemble");
+        let sel = selector("touch()");
+        let access = if reads {
+            StateAccess {
+                keyed_reads: vec![base],
+                ..Default::default()
+            }
+        } else {
+            StateAccess {
+                keyed_writes: vec![base],
+                ..Default::default()
+            }
+        };
+        let container = Container::new(
+            code,
+            vec![],
+            vec![Entry {
+                selector: sel,
+                offset: 0,
+                access,
+            }],
+        );
+        let loader = move |_key: &StorageKey| loaded;
+        let interp = Interpreter::for_entry(&container, sel, MAX_TX_METER)
+            .expect("entry")
+            .with_storage_loader(&loader)
+            .with_memory(&base.to_be_bytes());
+        if legacy {
+            interp.with_legacy_rules().run()
+        } else {
+            interp.run()
+        }
+    }
+
+    const READ_ROW: &str = "LDI r0, 0\nLDI r1, 16\nLDI r2, 64\nHASH r0, r1, r2\nSLOAD r3, r2\nHALT";
+    const WRITE_ROW: &str =
+        "LDI r0, 0\nLDI r1, 16\nLDI r2, 64\nHASH r0, r1, r2\nLDI r3, 5\nSSTORE r2, r3\nSSTORE r2, r3\nHALT";
+
+    #[test]
+    fn reading_an_existing_keyed_row_is_priced_as_a_read() {
+        let read = keyed_call(READ_ROW, true, 7, false).expect("halt");
+        assert_eq!(read.regs[3], 7);
+        assert!(read.meter_used < crate::meter::KEYED_SLOT_METER);
+        let legacy = keyed_call(READ_ROW, true, 7, true).expect("halt");
+        assert!(legacy.meter_used >= crate::meter::KEYED_SLOT_METER);
+    }
+
+    #[test]
+    fn a_fresh_keyed_row_pays_the_leaf_price_once_and_an_existing_row_does_not() {
+        let fresh = keyed_call(WRITE_ROW, false, 0, false).expect("halt");
+        assert!(fresh.meter_used >= crate::meter::KEYED_SLOT_METER);
+        assert!(fresh.meter_used < 2 * crate::meter::KEYED_SLOT_METER);
+        let existing = keyed_call(WRITE_ROW, false, 9, false).expect("halt");
+        assert!(existing.meter_used < crate::meter::KEYED_SLOT_METER);
+    }
+
     #[test]
     fn a_whole_block_of_keyed_slots_stays_within_reach_of_the_root_recompute() {
         let per_block = BLOCK_METER_BUDGET / crate::meter::KEYED_SLOT_METER;
@@ -2190,6 +2317,103 @@ mod keyed_slot_pricing_tests {
         assert!(
             crate::meter::KEYED_SLOT_METER > crate::meter::cost(crate::isa::OpCode::SStore) * 20,
             "the slot itself must dominate the store opcode, the permanent leaf is the cost"
+        );
+    }
+}
+
+#[cfg(test)]
+mod rule_tests {
+    use super::*;
+    use crate::asm::assemble;
+    use crate::container::{selector, Container, Entry, StateAccess, GENESIS_SIGNATURE};
+
+    #[test]
+    fn an_event_selector_wider_than_four_bytes_faults_under_current_rules() {
+        let code = assemble("LDI r0, 0\nLDI r1, 8\nLDI r2, 4294967297\nEMIT r0, r1, r2\nHALT")
+            .expect("assemble");
+        assert_eq!(
+            Interpreter::for_unchecked_program(&code, &[], 1_000_000).run(),
+            Err(Fault::Malformed)
+        );
+        let legacy = Interpreter::for_unchecked_program(&code, &[], 1_000_000)
+            .with_legacy_rules()
+            .run()
+            .expect("halt");
+        assert_eq!(legacy.effects.len(), 1);
+    }
+
+    #[test]
+    fn a_merkle_path_deeper_than_the_index_can_address_is_refused() {
+        let depth = 65usize;
+        let mut mem = vec![0u8; 72 + 32 * depth];
+        mem[32..40].copy_from_slice(&0u64.to_be_bytes());
+        let len = mem.len() as u64;
+        let program = format!("LDI r0, 0\nLDI r1, {len}\nLDI r2, 0\nMERKLEVERIFY r0, r1, r2\nHALT");
+        let code = assemble(&program).expect("assemble");
+        let mut leaf_hash = crate::crypto::merkle_leaf(&[0u8; 32]);
+        for _ in 0..depth {
+            leaf_hash = crate::crypto::merkle_node(&leaf_hash, &[0u8; 32]);
+        }
+        mem[..32].copy_from_slice(&leaf_hash);
+        let strict = Interpreter::for_unchecked_program(&code, &[], 10_000_000)
+            .with_memory(&mem)
+            .run()
+            .expect("halt");
+        assert_eq!(strict.regs[2], 0);
+        let legacy = Interpreter::for_unchecked_program(&code, &[], 10_000_000)
+            .with_memory(&mem)
+            .with_legacy_rules()
+            .run()
+            .expect("halt");
+        assert_eq!(legacy.regs[2], 1);
+    }
+
+    #[test]
+    fn the_genesis_entry_opens_only_through_for_genesis_and_duplicate_selectors_are_refused() {
+        let code = assemble("HALT").expect("assemble");
+        let genesis = selector(GENESIS_SIGNATURE);
+        let run = selector("run()");
+        let container = Container::new(
+            code.clone(),
+            vec![],
+            vec![
+                Entry {
+                    selector: genesis,
+                    offset: 0,
+                    access: StateAccess::default(),
+                },
+                Entry {
+                    selector: run,
+                    offset: 0,
+                    access: StateAccess::default(),
+                },
+            ],
+        );
+        assert_eq!(
+            Interpreter::for_entry(&container, genesis, 1_000).err(),
+            Some(Fault::UnknownSelector)
+        );
+        assert!(Interpreter::for_genesis(&container, 1_000).is_ok());
+        assert!(Interpreter::for_entry(&container, run, 1_000).is_ok());
+        let doubled = Container::new(
+            code,
+            vec![],
+            vec![
+                Entry {
+                    selector: run,
+                    offset: 0,
+                    access: StateAccess::default(),
+                },
+                Entry {
+                    selector: run,
+                    offset: 0,
+                    access: StateAccess::default(),
+                },
+            ],
+        );
+        assert_eq!(
+            Interpreter::for_entry(&doubled, run, 1_000).err(),
+            Some(Fault::Malformed)
         );
     }
 }
