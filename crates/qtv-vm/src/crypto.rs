@@ -65,7 +65,8 @@ pub(crate) fn verify_ml(m: &mut Machine, a: Reg, b: Reg, c: Reg) -> Result<(), F
             .map_err(|_| Fault::BadMemory)?;
         (pk, sig, region[PK + SIG..].to_vec())
     };
-    let ok = ml_dsa::verify(&pk, &message, &sig, VM_VERIFY_CONTEXT);
+    let ok = !ml_dsa::public_key_is_degenerate(&pk)
+        && ml_dsa::verify(&pk, &message, &sig, VM_VERIFY_CONTEXT);
     m.set_reg(c, u64::from(ok));
     Ok(())
 }
