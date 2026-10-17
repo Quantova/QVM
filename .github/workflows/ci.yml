@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   ci:
-    uses: Quantova/Quantova-Ci/.github/workflows/rust-ci.yml@0519572bfa55108c29aa5a5d391dd9df5b52b99d
+    uses: Quantova/Quantova-Ci/.github/workflows/rust-ci.yml@3eedb4e772007f2c5a301a2e2c9cc013481e369c
   fuzz:
     runs-on: ubuntu-latest
     steps:
