@@ -107,6 +107,29 @@ impl Manifest {
     }
 }
 
+pub const SYSTEM_PROGRAM_HASHES: &[[u8; 32]] = &[[
+    0x15, 0xd9, 0x2a, 0xfa, 0x40, 0xf5, 0x31, 0x4c, 0x14, 0xde, 0x21, 0x73, 0xa4, 0x15, 0xe9, 0xd4,
+    0x2b, 0x8f, 0x75, 0xeb, 0xf3, 0x30, 0x71, 0xe8, 0xea, 0x5e, 0xa5, 0xcd, 0x43, 0xe9, 0x5b, 0xd7,
+]];
+
+#[derive(Clone, Copy, Debug)]
+pub struct SystemProgram {
+    code: &'static [u8],
+}
+
+impl SystemProgram {
+    pub fn verify(code: &'static [u8]) -> Option<SystemProgram> {
+        let digest = qtv_crypto::sha3::sha3_256(code);
+        SYSTEM_PROGRAM_HASHES
+            .contains(&digest)
+            .then_some(SystemProgram { code })
+    }
+
+    pub fn code(&self) -> &'static [u8] {
+        self.code
+    }
+}
+
 pub struct Interpreter<'a> {
     code: &'a [u8],
     consts: &'a [u64],
@@ -161,8 +184,8 @@ impl<'a> Interpreter<'a> {
         self
     }
 
-    pub fn for_system_program(code: &'static [u8], consts: &'a [u64], meter_limit: u64) -> Self {
-        Interpreter::new(code, consts, meter_limit)
+    pub fn for_system_program(program: SystemProgram, consts: &'a [u64], meter_limit: u64) -> Self {
+        Interpreter::new(program.code, consts, meter_limit)
     }
 
     #[cfg(any(test, feature = "unchecked-programs"))]
