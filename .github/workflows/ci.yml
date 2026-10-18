@@ -16,3 +16,4 @@ jobs:
         with:
           toolchain: "1.98.0"
       - run: cargo test --locked --release --manifest-path fuzz/Cargo.toml
+      - run: cargo build --locked --release --manifest-path fuzz/Cargo.toml --bins
