@@ -179,7 +179,8 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    pub fn with_legacy_rules(mut self) -> Self {
+    #[cfg(test)]
+    fn with_legacy_rules(mut self) -> Self {
         self.strict = false;
         self
     }
@@ -373,13 +374,16 @@ impl<'a> Interpreter<'a> {
 
     fn charge_keyed(&mut self) -> Result<(), Fault> {
         if self.strict {
-            self.charge(crate::meter::KEYED_READ_METER)?;
+            self.charge(crate::meter::KEYED_READ_METER)
         } else {
-            self.charge(crate::meter::KEYED_SLOT_METER)?;
+            self.charge(crate::meter::KEYED_SLOT_METER)
         }
-        let retained = self
-            .keyed_bytes
-            .checked_add(STORAGE_KEY_BYTES as u64)
+    }
+
+    fn retain_keyed(&mut self, entries: u64) -> Result<(), Fault> {
+        let retained = (STORAGE_KEY_BYTES as u64)
+            .checked_mul(entries)
+            .and_then(|bytes| self.keyed_bytes.checked_add(bytes))
             .ok_or(Fault::EffectsTooLarge)?;
         if retained > crate::meter::EFFECTS_BYTES_CAP {
             return Err(Fault::EffectsTooLarge);
@@ -413,14 +417,17 @@ impl<'a> Interpreter<'a> {
         };
         let already = self.keyed_authorized_writes.contains(&key)
             || self.keyed_authorized_reads.contains(&key);
+        let entries = u64::from(is_write && !self.keyed_authorized_writes.contains(&key))
+            + u64::from(is_read && !self.keyed_authorized_reads.contains(&key));
+        if !already {
+            self.charge_keyed()?;
+        }
+        self.retain_keyed(entries)?;
         if is_write {
             self.keyed_authorized_writes.insert(key);
         }
         if is_read {
             self.keyed_authorized_reads.insert(key);
-        }
-        if !already {
-            self.charge_keyed()?;
         }
         Ok(())
     }
@@ -662,8 +669,9 @@ impl<'a> Interpreter<'a> {
                         self.charge(crate::meter::KEYED_SLOT_METER)?;
                     } else if self.dirty.insert(key)
                         && self.dirty.len() > crate::meter::FREE_DIRTY_SLOTS
+                        && !self.fresh_charged.contains(&key)
                     {
-                        self.charge(crate::meter::KEYED_READ_METER)?;
+                        self.charge(crate::meter::KEYED_SLOT_METER)?;
                     }
                     self.dirty.insert(key);
                 } else if self.dirty.insert(key)

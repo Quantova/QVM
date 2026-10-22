@@ -154,6 +154,34 @@ fn parse_instr(
             want(3)?;
             triple(no, &ops, Triple::MulHi)?
         }
+        "DIVW" | "REMW" => {
+            want(6)?;
+            let dlo = reg(no, ops[0])?;
+            let dhi = reg(no, ops[1])?;
+            let alo = reg(no, ops[2])?;
+            let ahi = reg(no, ops[3])?;
+            let blo = reg(no, ops[4])?;
+            let bhi = reg(no, ops[5])?;
+            if mnemonic == "DIVW" {
+                Instr::DivW {
+                    dlo,
+                    dhi,
+                    alo,
+                    ahi,
+                    blo,
+                    bhi,
+                }
+            } else {
+                Instr::RemW {
+                    dlo,
+                    dhi,
+                    alo,
+                    ahi,
+                    blo,
+                    bhi,
+                }
+            }
+        }
         "AND" => {
             want(3)?;
             triple(no, &ops, Triple::And)?
