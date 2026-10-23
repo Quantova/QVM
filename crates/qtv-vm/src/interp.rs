@@ -726,7 +726,8 @@ impl<'a> Interpreter<'a> {
                 let out_ptr = m.reg(c);
                 let base = if len >= 8 {
                     m.mem_region(preimage_ptr, 8)
-                        .map(|head| u64::from_be_bytes(head.try_into().unwrap()))
+                        .and_then(|head| <[u8; 8]>::try_from(head).ok())
+                        .map(u64::from_be_bytes)
                 } else {
                     None
                 };
