@@ -34,6 +34,7 @@ pub enum Rule {
     DeployParams = 19,
     NameInvalid = 20,
     GuardianSetInvalid = 21,
+    LegacyRule = 22,
     OutOfMeter = 64,
     UnknownEntry = 65,
     MemoryOutOfRange = 66,
@@ -54,7 +55,7 @@ pub enum Rule {
     GenesisCall = 81,
 }
 
-const ALL: [Rule; 41] = [
+const ALL: [Rule; 42] = [
     Rule::Unknown,
     Rule::Guard,
     Rule::Limits,
@@ -77,6 +78,7 @@ const ALL: [Rule; 41] = [
     Rule::DeployParams,
     Rule::NameInvalid,
     Rule::GuardianSetInvalid,
+    Rule::LegacyRule,
     Rule::OutOfMeter,
     Rule::UnknownEntry,
     Rule::MemoryOutOfRange,
@@ -138,6 +140,7 @@ impl Rule {
             Rule::DeployParams => "deploy_parameters_invalid",
             Rule::NameInvalid => "name_invalid",
             Rule::GuardianSetInvalid => "guardian_set_invalid",
+            Rule::LegacyRule => "contract_rule",
             Rule::OutOfMeter => "out_of_meter",
             Rule::UnknownEntry => "unknown_entry",
             Rule::MemoryOutOfRange => "memory_out_of_range",
@@ -185,6 +188,7 @@ impl Rule {
             Rule::DeployParams => "The deploy parameters are incomplete",
             Rule::NameInvalid => "The name is not valid",
             Rule::GuardianSetInvalid => "The new guardian set is not valid",
+            Rule::LegacyRule => "The call was rejected by a contract rule",
             Rule::OutOfMeter => "The call ran out of meter",
             Rule::UnknownEntry => "The contract has no such entry",
             Rule::MemoryOutOfRange => "The call arguments do not fit the contract memory",
@@ -230,6 +234,7 @@ impl Rule {
             Rule::DeployParams => "The deploy did not carry every parameter the contract genesis reads, or the parameter frame is not terminated. Deploy with the Quantova IDE or SDK so the parameters are framed correctly.",
             Rule::NameInvalid => "Names must be between 3 and 32 bytes of lower case letters, digits and hyphens, with nothing after the declared length. Correct the name and call again.",
             Rule::GuardianSetInvalid => "A guardian set must contain distinct members and no empty slot. Correct the member list and submit it again.",
+            Rule::LegacyRule => "A guard, limits, denies, signature or invariant check in the contract refused these inputs, so nothing was changed. This contract was compiled before rejection reasons were recorded. Check the inputs against the contract source, or recompile with the current Quanta compiler and deploy again to get the exact rule and line.",
             Rule::OutOfMeter => "The call needed more meter than its limit allows. Raise the meter limit, up to 12,500,000 for a call or 50,000,000 for a deploy, or split the work across calls.",
             Rule::UnknownEntry => "The call selector does not match any entry of this contract. Use the selector from the contract ABI for the entry you want.",
             Rule::MemoryOutOfRange => "An argument or signature region points outside the contract memory. Build the call with the Quantova SDK so every offset matches the contract ABI.",
@@ -306,7 +311,18 @@ pub fn halting_stubs(code: &[u8]) -> Option<Vec<u8>> {
                 a: ABORT_REG,
                 b: ZERO_REG,
             });
-        if tagged && zeroed && divides {
+        let legacy = second.1
+            == (Instr::Ldi {
+                d: ABORT_REG,
+                imm: 0,
+            })
+            && third.1
+                == (Instr::Div {
+                    d: ABORT_REG,
+                    a: ABORT_REG,
+                    b: ABORT_REG,
+                });
+        if (tagged && zeroed && divides) || legacy {
             let mut patch = Vec::with_capacity(third.2);
             Instr::Halt.encode(&mut patch);
             while patch.len() < third.2 {
@@ -320,7 +336,11 @@ pub fn halting_stubs(code: &[u8]) -> Option<Vec<u8>> {
 }
 
 pub fn reason_in(regs: &[u64]) -> Option<(Rule, u32)> {
-    regs.get(ABORT_REG as usize).copied().and_then(split_code)
+    match regs.get(ABORT_REG as usize).copied() {
+        Some(0) => Some((Rule::LegacyRule, 0)),
+        Some(code) => split_code(code),
+        None => None,
+    }
 }
 
 pub fn rule_of_fault(fault: &Fault) -> Rule {
