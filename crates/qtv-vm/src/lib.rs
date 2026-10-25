@@ -10,6 +10,7 @@
 compile_error!("qtv-vm must be built with panic = \"unwind\" so a crypto panic becomes a fault instead of aborting the node");
 
 pub mod abi;
+pub mod abort;
 pub mod asm;
 pub mod container;
 pub mod crypto;
