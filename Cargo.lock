@@ -5,7 +5,7 @@ version = 4
 [[package]]
 name = "qtv-crypto"
 version = "0.6.0"
-source = "git+https://github.com/Quantova/Q-Crypto.git?rev=8dc50cf6eaa8bd521c0d203df5cb7fbf5b51e905#8dc50cf6eaa8bd521c0d203df5cb7fbf5b51e905"
+source = "git+https://github.com/Quantova/Q-Crypto.git?rev=38f41dede65ed1918e89402c61b711defe16ae26#38f41dede65ed1918e89402c61b711defe16ae26"
 
 [[package]]
 name = "qtv-vm"
